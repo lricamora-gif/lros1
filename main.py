@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
@@ -11,6 +11,7 @@ import requests
 import cohere
 from datetime import datetime
 from typing import Optional, List
+import asyncio
 
 app = FastAPI(title="LROS Autonomous Evolution Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -24,13 +25,17 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 cohere_client = cohere.Client(api_key=os.environ.get("COHERE_API_KEY")) if os.environ.get("COHERE_API_KEY") else None
 WRITER_API_KEY = os.environ.get("WRITER_API_KEY")
 
-# ==================== PATTERN REGISTRY (stores prompt templates) ====================
+# ==================== PATTERN REGISTRY ====================
 PATTERN_FILE = "patterns.json"
 
 def load_patterns():
-    if os.path.exists(PATTERN_FILE):
-        with open(PATTERN_FILE) as f:
-            return json.load(f)
+    try:
+        with open(PATTERN_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
     # Default patterns
     return [
         {"id": "p1", "prompt": "Explain {topic} in simple terms.", "temperature": 0.7, "rating": 0.5, "uses": 0},
@@ -44,7 +49,7 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-# ==================== MULTI‑AI CALLER (supports all providers) ====================
+# ==================== MULTI‑AI CALLER ====================
 def call_ai(prompt, temperature=0.7, model="openai"):
     """Call the specified AI model, with fallback to simulation."""
     if model == "openai" and openai.api_key:
@@ -117,8 +122,32 @@ class Feedback(BaseModel):
     comment: Optional[str] = None
     context: Optional[str] = None
 
+async def run_evolution_background():
+    """Run the evolution engine as a background task."""
+    patterns = load_patterns()
+    candidates = [p for p in patterns if p.get("uses", 0) > 5]
+    if not candidates:
+        print("Evolution: not enough data")
+        return
+
+    worst = min(candidates, key=lambda p: p["rating"])
+    worst_rating = worst["rating"]
+    mutations = [mutate_pattern(worst) for _ in range(3)]
+
+    for m in mutations:
+        m["rating"] = evaluate_pattern(m)
+
+    best_mutation = max(mutations, key=lambda m: m["rating"])
+    if best_mutation["rating"] > worst_rating:
+        idx = patterns.index(worst)
+        patterns[idx] = best_mutation
+        save_patterns(patterns)
+        print(f"Evolution succeeded! Improvement: {best_mutation['rating'] - worst_rating}")
+    else:
+        print("Evolution: no improvement")
+
 @app.post("/api/feedback")
-async def submit_feedback(feedback: Feedback):
+async def submit_feedback(feedback: Feedback, background_tasks: BackgroundTasks):
     patterns = load_patterns()
     for p in patterns:
         if p["id"] == feedback.pattern_id:
@@ -130,6 +159,12 @@ async def submit_feedback(feedback: Feedback):
                 p["rating"] = feedback.rating
             break
     save_patterns(patterns)
+
+    # Trigger evolution automatically after every 5 total ratings
+    total_uses = sum(p.get("uses", 0) for p in patterns)
+    if total_uses > 0 and total_uses % 5 == 0:
+        background_tasks.add_task(run_evolution_background)
+
     # Optional: store in Google Sheets – omitted for brevity
     return {"status": "ok"}
 
@@ -137,7 +172,7 @@ async def submit_feedback(feedback: Feedback):
 class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
-    model: Optional[str] = "openai"  # can be overridden
+    model: Optional[str] = "openai"
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
@@ -171,7 +206,6 @@ def mutate_pattern(pattern):
     return new
 
 def evaluate_pattern(pattern, test_inputs=None):
-    """Use an AI judge (DeepSeek) to rate the pattern's responses."""
     if not test_inputs:
         test_inputs = ["What is machine learning?", "Explain quantum computing simply", "How do I start coding?"]
     total = 0
@@ -189,38 +223,20 @@ def evaluate_pattern(pattern, test_inputs=None):
 
 @app.post("/api/evolve")
 async def run_evolution():
-    patterns = load_patterns()
-    candidates = [p for p in patterns if p.get("uses", 0) > 5]
-    if not candidates:
-        return {"status": "not enough data", "message": "Need at least 5 uses per pattern to evolve"}
+    await run_evolution_background()
+    return {"status": "triggered"}
 
-    worst = min(candidates, key=lambda p: p["rating"])
-    worst_rating = worst["rating"]
-    mutations = [mutate_pattern(worst) for _ in range(3)]
-
-    for m in mutations:
-        m["rating"] = evaluate_pattern(m)
-
-    best_mutation = max(mutations, key=lambda m: m["rating"])
-    if best_mutation["rating"] > worst_rating:
-        idx = patterns.index(worst)
-        patterns[idx] = best_mutation
-        save_patterns(patterns)
-        return {
-            "status": "evolved",
-            "old_pattern": worst,
-            "new_pattern": best_mutation,
-            "improvement": best_mutation["rating"] - worst_rating
-        }
-    return {"status": "no improvement", "best_mutation_rating": best_mutation["rating"], "worst_rating": worst_rating}
-
-# ==================== STATE (for one‑button play) ====================
+# ==================== STATE & PHASES ====================
 STATE_FILE = "state.json"
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
+    try:
+        with open(STATE_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
     return {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
 
 def save_state(state):
@@ -252,7 +268,6 @@ def evolve_phase(action: dict):
         return {"status": "advanced", "phase": state["current_phase"]}
     return {"status": "unknown"}
 
-# ==================== ROOT ====================
 @app.get("/")
 def root():
     return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
