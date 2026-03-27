@@ -11,12 +11,11 @@ import requests
 import cohere
 from datetime import datetime
 from typing import Optional, List
-import asyncio
 
 app = FastAPI(title="LROS Autonomous Evolution Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# ==================== API KEYS (set in Render environment) ====================
+# ==================== API KEYS ====================
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 if os.environ.get("GEMINI_API_KEY"):
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -51,7 +50,6 @@ def save_patterns(patterns):
 
 # ==================== MULTI‑AI CALLER ====================
 def call_ai(prompt, temperature=0.7, model="openai"):
-    """Call the specified AI model, with fallback to simulation."""
     if model == "openai" and openai.api_key:
         try:
             response = openai.ChatCompletion.create(
@@ -123,7 +121,6 @@ class Feedback(BaseModel):
     context: Optional[str] = None
 
 async def run_evolution_background():
-    """Run the evolution engine as a background task."""
     patterns = load_patterns()
     candidates = [p for p in patterns if p.get("uses", 0) > 5]
     if not candidates:
@@ -160,12 +157,11 @@ async def submit_feedback(feedback: Feedback, background_tasks: BackgroundTasks)
             break
     save_patterns(patterns)
 
-    # Trigger evolution automatically after every 5 total ratings
+    # Auto‑trigger evolution after every 5 total ratings
     total_uses = sum(p.get("uses", 0) for p in patterns)
     if total_uses > 0 and total_uses % 5 == 0:
         background_tasks.add_task(run_evolution_background)
 
-    # Optional: store in Google Sheets – omitted for brevity
     return {"status": "ok"}
 
 # ==================== GENERATION ENDPOINT ====================
@@ -222,6 +218,7 @@ def evaluate_pattern(pattern, test_inputs=None):
     return total / len(test_inputs)
 
 @app.post("/api/evolve")
+@app.get("/api/evolve")
 async def run_evolution():
     await run_evolution_background()
     return {"status": "triggered"}
