@@ -11,6 +11,7 @@ import requests
 import cohere
 from datetime import datetime
 from typing import Optional, List
+import asyncio
 
 app = FastAPI(title="LROS Autonomous Evolution Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -265,6 +266,55 @@ def evolve_phase(action: dict):
         return {"status": "advanced", "phase": state["current_phase"]}
     return {"status": "unknown"}
 
+# ==================== SELF‑PLAY ====================
+SELF_PLAY_TOPICS = [
+    "artificial intelligence", "climate change", "quantum computing",
+    "space exploration", "renewable energy", "blockchain technology",
+    "mental health awareness", "electric vehicles", "machine learning basics",
+    "future of work", "genetic engineering", "cybersecurity",
+    "sustainable agriculture", "virtual reality", "cryptocurrency",
+    "constitutional AI", "self‑evolving systems", "ethical AI"
+]
+
+def rate_response_with_judge(response):
+    judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless):\n\nResponse: {response}\n\nRating (just a number):"
+    judge_resp = call_ai(judge_prompt, 0, "deepseek")
+    try:
+        rating = float(judge_resp.strip())
+        return max(0.0, min(1.0, rating))
+    except:
+        return 0.5
+
+@app.post("/api/self_play")
+async def self_play(count: int = 5):
+    patterns = load_patterns()
+    if not patterns:
+        return {"status": "no patterns"}
+    best_pattern = max(patterns, key=lambda p: p["rating"])
+    results = []
+    for _ in range(min(count, 20)):  # limit to 20 per call
+        topic = random.choice(SELF_PLAY_TOPICS)
+        prompt = best_pattern["prompt"].format(topic=topic)
+        response = call_ai(prompt, best_pattern["temperature"], "deepseek")
+        rating = rate_response_with_judge(response)
+        # Submit feedback directly
+        patterns = load_patterns()
+        for p in patterns:
+            if p["id"] == best_pattern["id"]:
+                p["uses"] = p.get("uses", 0) + 1
+                old_uses = p["uses"] - 1
+                if old_uses > 0:
+                    p["rating"] = (p["rating"] * old_uses + rating) / p["uses"]
+                else:
+                    p["rating"] = rating
+                break
+        save_patterns(patterns)
+        results.append({"topic": topic, "rating": rating})
+        await asyncio.sleep(0.2)  # small delay
+    # After batch, evolution may be triggered automatically via the feedback mechanism
+    return {"status": "self_play_completed", "count": len(results), "results": results}
+
+# ==================== ROOT ====================
 @app.get("/")
 def root():
     return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
