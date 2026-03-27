@@ -4,6 +4,5 @@ openai
 google-generativeai
 anthropic
 requests
-gspread
-google-auth
+cohere
 python-multipart
