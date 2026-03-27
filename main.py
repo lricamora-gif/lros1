@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
@@ -10,7 +10,7 @@ import anthropic
 import requests
 import cohere
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 # -------------------- CONFIGURATION --------------------
 app = FastAPI(title="LROS Multi‑AI Engine")
@@ -115,7 +115,7 @@ def call_ai(prompt, temperature=0.7, model="openai"):
     # Fallback simulation
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
-# -------------------- FEEDBACK ENDPOINT (unchanged) --------------------
+# -------------------- FEEDBACK ENDPOINT --------------------
 class Feedback(BaseModel):
     pattern_id: str
     rating: float
@@ -157,15 +157,13 @@ async def generate_orchestrated(req: OrchestrationRequest):
     prompt = pattern["prompt"].format(topic=req.topic)
     temperature = pattern["temperature"]
 
-    # Handle super‑ensemble separately
+    # Super Ensemble: query all six models
     if req.mode == "super-ensemble":
-        # Define the six models we support
         models_to_use = ["openai", "gemini", "claude", "deepseek", "cohere", "writer"]
         responses = {}
         for m in models_to_use:
             resp = call_ai(prompt, temperature, m)
             responses[m] = resp
-        # Combine them (simple concatenation with labels)
         combined = "**Super Ensemble**\n\n"
         for m, resp in responses.items():
             combined += f"**{m.upper()}**:\n{resp}\n\n---\n\n"
@@ -201,11 +199,109 @@ async def generate_orchestrated(req: OrchestrationRequest):
 
     return {"response": combined, "pattern_id": pattern["id"]}
 
-# -------------------- EVOLUTION ENGINE (unchanged) --------------------
-# ... (include your existing evolve endpoint, state, etc.) ...
-# For brevity, we omit them here, but they must be present.
+# -------------------- STATE & PHASES (for one‑button play) --------------------
+STATE_FILE = "state.json"
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+@app.get("/api/state")
+def get_state():
+    return load_state()
+
+@app.post("/api/evolution")
+def evolve_phase(action: dict):
+    state = load_state()
+    act = action.get("action")
+    if act == "start":
+        state["logs"].append({"timestamp": datetime.utcnow().isoformat(), "message": "Evolution started", "type": "info"})
+        save_state(state)
+        return {"status": "started"}
+    elif act == "reset":
+        state = {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
+        save_state(state)
+        return {"status": "reset"}
+    elif act == "step":
+        if state["current_phase"] < 9:
+            state["completed_phases"].append(state["current_phase"])
+            state["current_phase"] += 1
+            state["logs"].append({"timestamp": datetime.utcnow().isoformat(), "message": f"Phase {state['current_phase']} completed", "type": "info"})
+            save_state(state)
+        return {"status": "advanced", "phase": state["current_phase"]}
+    return {"status": "unknown"}
+
+# -------------------- EVOLUTION ENGINE --------------------
+def mutate_pattern(pattern):
+    import copy
+    new = copy.deepcopy(pattern)
+    new["id"] = f"{pattern['id']}_mut_{random.randint(1000,9999)}"
+    words = pattern["prompt"].split()
+    if random.random() < 0.5 and len(words) > 2:
+        adjectives = ["concise", "detailed", "creative", "technical", "funny", "professional"]
+        pos = random.randint(1, len(words)-1)
+        words.insert(pos, random.choice(adjectives))
+        new["prompt"] = " ".join(words)
+    else:
+        new["temperature"] = min(1.0, max(0.0, pattern["temperature"] + random.uniform(-0.2, 0.2)))
+    new["rating"] = 0.5
+    new["uses"] = 0
+    return new
+
+def evaluate_pattern(pattern, test_inputs=None):
+    if not test_inputs:
+        test_inputs = ["What is machine learning?", "Explain quantum computing simply", "How do I start coding?"]
+    total = 0
+    for query in test_inputs:
+        prompt = pattern["prompt"].format(topic=query)
+        response = call_ai(prompt, pattern["temperature"])
+        judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless):\n\nResponse: {response}\n\nRating (just a number):"
+        judge_resp = call_ai(judge_prompt, 0)
+        try:
+            score = float(judge_resp.strip())
+        except:
+            score = 0.5
+        total += score
+    return total / len(test_inputs)
+
+@app.post("/api/evolve")
+async def run_evolution():
+    patterns = load_patterns()
+    candidates = [p for p in patterns if p.get("uses", 0) > 5]
+    if not candidates:
+        return {"status": "not enough data", "message": "Need at least 5 uses per pattern to evolve"}
+
+    worst = min(candidates, key=lambda p: p["rating"])
+    worst_rating = worst["rating"]
+    mutations = [mutate_pattern(worst) for _ in range(3)]
+
+    for m in mutations:
+        m["rating"] = evaluate_pattern(m)
+
+    best_mutation = max(mutations, key=lambda m: m["rating"])
+    if best_mutation["rating"] > worst_rating:
+        idx = patterns.index(worst)
+        patterns[idx] = best_mutation
+        save_patterns(patterns)
+        return {
+            "status": "evolved",
+            "old_pattern": worst,
+            "new_pattern": best_mutation,
+            "improvement": best_mutation["rating"] - worst_rating
+        }
+    return {"status": "no improvement", "best_mutation_rating": best_mutation["rating"], "worst_rating": worst_rating}
 
 # -------------------- ROOT --------------------
 @app.get("/")
 def root():
     return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
