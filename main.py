@@ -4,33 +4,78 @@ from pydantic import BaseModel
 import json
 import os
 import random
+import openai
+import google.generativeai as genai
+import anthropic
 import requests
+import cohere
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
-app = FastAPI(title="LROS AI Engine")
+app = FastAPI(title="LROS Autonomous Evolution Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# DeepSeek API key
+# ==================== API KEYS (set in Render environment) ====================
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+if os.environ.get("GEMINI_API_KEY"):
+    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if os.environ.get("ANTHROPIC_API_KEY") else None
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+cohere_client = cohere.Client(api_key=os.environ.get("COHERE_API_KEY")) if os.environ.get("COHERE_API_KEY") else None
+WRITER_API_KEY = os.environ.get("WRITER_API_KEY")
 
-# Pattern registry
+# ==================== PATTERN REGISTRY (stores prompt templates) ====================
 PATTERN_FILE = "patterns.json"
+
 def load_patterns():
     if os.path.exists(PATTERN_FILE):
         with open(PATTERN_FILE) as f:
             return json.load(f)
+    # Default patterns
     return [
         {"id": "p1", "prompt": "Explain {topic} in simple terms.", "temperature": 0.7, "rating": 0.5, "uses": 0},
         {"id": "p2", "prompt": "Write a detailed technical article about {topic}.", "temperature": 0.5, "rating": 0.5, "uses": 0},
         {"id": "p3", "prompt": "Give a creative story about {topic}.", "temperature": 0.9, "rating": 0.5, "uses": 0},
+        {"id": "p4", "prompt": "Provide a legal analysis of {topic}.", "temperature": 0.6, "rating": 0.5, "uses": 0},
+        {"id": "p5", "prompt": "Write code to solve {topic}.", "temperature": 0.4, "rating": 0.5, "uses": 0},
     ]
+
 def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-def call_ai(prompt, temperature=0.7):
-    if DEEPSEEK_API_KEY:
+# ==================== MULTI‑AI CALLER (supports all providers) ====================
+def call_ai(prompt, temperature=0.7, model="openai"):
+    """Call the specified AI model, with fallback to simulation."""
+    if model == "openai" and openai.api_key:
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"OpenAI error: {e}")
+    if model == "gemini" and genai.api_key:
+        try:
+            gem_model = genai.GenerativeModel("gemini-1.5-flash")
+            response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
+            return response.text
+        except Exception as e:
+            print(f"Gemini error: {e}")
+    if model == "claude" and anthropic_client:
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=1000,
+                temperature=temperature,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text
+        except Exception as e:
+            print(f"Claude error: {e}")
+    if model == "deepseek" and DEEPSEEK_API_KEY:
         try:
             headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
             payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "temperature": temperature}
@@ -38,9 +83,34 @@ def call_ai(prompt, temperature=0.7):
             return response.json()["choices"][0]["message"]["content"]
         except Exception as e:
             print(f"DeepSeek error: {e}")
+    if model == "cohere" and cohere_client:
+        try:
+            response = cohere_client.generate(
+                prompt=prompt,
+                model="command-r-plus",
+                temperature=temperature,
+                max_tokens=1000
+            )
+            return response.generations[0].text
+        except Exception as e:
+            print(f"Cohere error: {e}")
+    if model == "writer" and WRITER_API_KEY:
+        try:
+            headers = {"Authorization": WRITER_API_KEY, "Content-Type": "application/json"}
+            payload = {
+                "prompt": prompt,
+                "model": "palmyra-instruct-30b",
+                "temperature": temperature,
+                "max_tokens": 1000
+            }
+            response = requests.post("https://api.writer.com/v1/completions", json=payload, headers=headers)
+            return response.json()["completion"]
+        except Exception as e:
+            print(f"Writer error: {e}")
+    # Fallback simulation
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
-# Feedback endpoint
+# ==================== FEEDBACK ENDPOINT ====================
 class Feedback(BaseModel):
     pattern_id: str
     rating: float
@@ -60,12 +130,14 @@ async def submit_feedback(feedback: Feedback):
                 p["rating"] = feedback.rating
             break
     save_patterns(patterns)
+    # Optional: store in Google Sheets – omitted for brevity
     return {"status": "ok"}
 
-# Simple generate endpoint
+# ==================== GENERATION ENDPOINT ====================
 class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
+    model: Optional[str] = "openai"  # can be overridden
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
@@ -78,46 +150,10 @@ async def generate(req: GenerateRequest):
         pattern = max(patterns, key=lambda p: p["rating"])
     prompt = pattern["prompt"].format(topic=req.topic)
     temperature = pattern["temperature"]
-    response = call_ai(prompt, temperature)
+    response = call_ai(prompt, temperature, req.model)
     return {"response": response, "pattern_id": pattern["id"]}
 
-# State endpoints
-STATE_FILE = "state.json"
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-@app.get("/api/state")
-def get_state():
-    return load_state()
-
-@app.post("/api/evolution")
-def evolve_phase(action: dict):
-    state = load_state()
-    act = action.get("action")
-    if act == "start":
-        state["logs"].append({"timestamp": datetime.utcnow().isoformat(), "message": "Evolution started", "type": "info"})
-        save_state(state)
-        return {"status": "started"}
-    elif act == "reset":
-        state = {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
-        save_state(state)
-        return {"status": "reset"}
-    elif act == "step":
-        if state["current_phase"] < 9:
-            state["completed_phases"].append(state["current_phase"])
-            state["current_phase"] += 1
-            state["logs"].append({"timestamp": datetime.utcnow().isoformat(), "message": f"Phase {state['current_phase']} completed", "type": "info"})
-            save_state(state)
-        return {"status": "advanced", "phase": state["current_phase"]}
-    return {"status": "unknown"}
-
-# Evolution engine (simplified)
+# ==================== EVOLUTION ENGINE ====================
 def mutate_pattern(pattern):
     import copy
     new = copy.deepcopy(pattern)
@@ -135,13 +171,20 @@ def mutate_pattern(pattern):
     return new
 
 def evaluate_pattern(pattern, test_inputs=None):
+    """Use an AI judge (DeepSeek) to rate the pattern's responses."""
     if not test_inputs:
         test_inputs = ["What is machine learning?", "Explain quantum computing simply", "How do I start coding?"]
     total = 0
     for query in test_inputs:
         prompt = pattern["prompt"].format(topic=query)
         response = call_ai(prompt, pattern["temperature"])
-        total += random.uniform(0.4, 0.9)  # simple simulation for now
+        judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless):\n\nResponse: {response}\n\nRating (just a number):"
+        judge_resp = call_ai(judge_prompt, 0)
+        try:
+            score = float(judge_resp.strip())
+        except:
+            score = 0.5
+        total += score
     return total / len(test_inputs)
 
 @app.post("/api/evolve")
@@ -171,9 +214,48 @@ async def run_evolution():
         }
     return {"status": "no improvement", "best_mutation_rating": best_mutation["rating"], "worst_rating": worst_rating}
 
+# ==================== STATE (for one‑button play) ====================
+STATE_FILE = "state.json"
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+@app.get("/api/state")
+def get_state():
+    return load_state()
+
+@app.post("/api/evolution")
+def evolve_phase(action: dict):
+    state = load_state()
+    act = action.get("action")
+    if act == "start":
+        state["logs"].append({"timestamp": datetime.utcnow().isoformat(), "message": "Evolution started", "type": "info"})
+        save_state(state)
+        return {"status": "started"}
+    elif act == "reset":
+        state = {"current_phase": 0, "completed_phases": [], "logs": [], "bond_status": "HOLDS"}
+        save_state(state)
+        return {"status": "reset"}
+    elif act == "step":
+        if state["current_phase"] < 9:
+            state["completed_phases"].append(state["current_phase"])
+            state["current_phase"] += 1
+            state["logs"].append({"timestamp": datetime.utcnow().isoformat(), "message": f"Phase {state['current_phase']} completed", "type": "info"})
+            save_state(state)
+        return {"status": "advanced", "phase": state["current_phase"]}
+    return {"status": "unknown"}
+
+# ==================== ROOT ====================
 @app.get("/")
 def root():
-    return {"message": "LROS AI Engine is alive", "bond": "HOLDS"}
+    return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
 
 if __name__ == "__main__":
     import uvicorn
