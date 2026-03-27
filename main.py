@@ -6,9 +6,9 @@ import os
 import random
 import requests
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
-app = FastAPI(title="LROS Multi‑AI Engine")
+app = FastAPI(title="LROS AI Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # DeepSeek API key
@@ -29,9 +29,8 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-def call_ai(prompt, temperature=0.7, model="deepseek"):
-    # Only DeepSeek for now
-    if model == "deepseek" and DEEPSEEK_API_KEY:
+def call_ai(prompt, temperature=0.7):
+    if DEEPSEEK_API_KEY:
         try:
             headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
             payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "temperature": temperature}
@@ -39,7 +38,6 @@ def call_ai(prompt, temperature=0.7, model="deepseek"):
             return response.json()["choices"][0]["message"]["content"]
         except Exception as e:
             print(f"DeepSeek error: {e}")
-    # Fallback simulation
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # Feedback endpoint
@@ -64,15 +62,13 @@ async def submit_feedback(feedback: Feedback):
     save_patterns(patterns)
     return {"status": "ok"}
 
-# Orchestration endpoint
-class OrchestrationRequest(BaseModel):
+# Simple generate endpoint
+class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
-    mode: str
-    models: Optional[List[str]] = None
 
-@app.post("/api/generate/orchestrated")
-async def generate_orchestrated(req: OrchestrationRequest):
+@app.post("/api/generate")
+async def generate(req: GenerateRequest):
     patterns = load_patterns()
     if req.pattern_id:
         pattern = next((p for p in patterns if p["id"] == req.pattern_id), None)
@@ -82,17 +78,8 @@ async def generate_orchestrated(req: OrchestrationRequest):
         pattern = max(patterns, key=lambda p: p["rating"])
     prompt = pattern["prompt"].format(topic=req.topic)
     temperature = pattern["temperature"]
-
-    # For super‑ensemble, we still call DeepSeek (or simulate) – but the frontend expects a combined answer.
-    # We'll just call DeepSeek once and wrap it as "Super Ensemble" for simplicity.
-    if req.mode == "super-ensemble":
-        response = call_ai(prompt, temperature, "deepseek")
-        combined = f"**Super Ensemble**\n\n**DEEPSEEK**:\n{response}"
-        return {"response": combined, "pattern_id": pattern["id"]}
-
-    # For other modes, we treat them as single for now (can be expanded later)
-    combined = call_ai(prompt, temperature, "deepseek")
-    return {"response": combined, "pattern_id": pattern["id"]}
+    response = call_ai(prompt, temperature)
+    return {"response": response, "pattern_id": pattern["id"]}
 
 # State endpoints
 STATE_FILE = "state.json"
@@ -154,9 +141,7 @@ def evaluate_pattern(pattern, test_inputs=None):
     for query in test_inputs:
         prompt = pattern["prompt"].format(topic=query)
         response = call_ai(prompt, pattern["temperature"])
-        # Simple judge: length-based or just return 0.5
-        # For simplicity, we'll return a random score to simulate
-        total += random.uniform(0.4, 0.9)
+        total += random.uniform(0.4, 0.9)  # simple simulation for now
     return total / len(test_inputs)
 
 @app.post("/api/evolve")
@@ -188,7 +173,7 @@ async def run_evolution():
 
 @app.get("/")
 def root():
-    return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
+    return {"message": "LROS AI Engine is alive", "bond": "HOLDS"}
 
 if __name__ == "__main__":
     import uvicorn
