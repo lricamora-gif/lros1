@@ -6,3 +6,4 @@ anthropic
 requests
 gspread
 google-auth
+python-multipart
