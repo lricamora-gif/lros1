@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
@@ -13,19 +13,19 @@ from datetime import datetime
 from typing import Optional, List
 import asyncio
 
-app = FastAPI(title="LROS Autonomous Evolution Engine")
+app = FastAPI(title="LROS Ultimate Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# ==================== API KEYS ====================
+# -------------------- API KEYS --------------------
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 if os.environ.get("GEMINI_API_KEY"):
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if os.environ.get("ANTHROPIC_API_KEY") else None
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")          # your paid key
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 cohere_client = cohere.Client(api_key=os.environ.get("COHERE_API_KEY")) if os.environ.get("COHERE_API_KEY") else None
 WRITER_API_KEY = os.environ.get("WRITER_API_KEY")
 
-# ==================== PATTERN REGISTRY ====================
+# -------------------- PATTERN REGISTRY --------------------
 PATTERN_FILE = "patterns.json"
 
 def load_patterns():
@@ -48,7 +48,7 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-# ==================== MULTI‑AI CALLER ====================
+# -------------------- MULTI‑AI CALLER --------------------
 def call_ai(prompt, temperature=0.7, model="openai"):
     if model == "openai" and openai.api_key:
         try:
@@ -112,7 +112,7 @@ def call_ai(prompt, temperature=0.7, model="openai"):
             print(f"Writer error: {e}")
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
-# ==================== FEEDBACK ENDPOINT ====================
+# -------------------- FEEDBACK & EVOLUTION --------------------
 class Feedback(BaseModel):
     pattern_id: str
     rating: float
@@ -162,7 +162,7 @@ async def submit_feedback(feedback: Feedback, background_tasks: BackgroundTasks)
 
     return {"status": "ok"}
 
-# ==================== GENERATION ENDPOINT ====================
+# -------------------- GENERATION --------------------
 class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
@@ -182,7 +182,7 @@ async def generate(req: GenerateRequest):
     response = call_ai(prompt, temperature, req.model)
     return {"response": response, "pattern_id": pattern["id"]}
 
-# ==================== EVOLUTION ENGINE ====================
+# -------------------- EVOLUTION ENGINE --------------------
 def mutate_pattern(pattern):
     import copy
     new = copy.deepcopy(pattern)
@@ -221,7 +221,7 @@ async def run_evolution():
     await run_evolution_background()
     return {"status": "triggered"}
 
-# ==================== STATE & PHASES ====================
+# -------------------- STATE & PHASES --------------------
 STATE_FILE = "state.json"
 
 def load_state():
@@ -263,7 +263,7 @@ def evolve_phase(action: dict):
         return {"status": "advanced", "phase": state["current_phase"]}
     return {"status": "unknown"}
 
-# ==================== SELF‑PLAY (CONTINUOUS) ====================
+# -------------------- SELF‑PLAY (CONTINUOUS) --------------------
 SELF_PLAY_TOPICS = [
     "artificial intelligence", "climate change", "quantum computing",
     "space exploration", "renewable energy", "blockchain technology",
@@ -283,14 +283,12 @@ def rate_response_with_judge(response):
         return 0.5
 
 async def continuous_self_play(interval_seconds=2):
-    """Run forever, generating synthetic feedback at a fixed interval."""
     while True:
         try:
             patterns = load_patterns()
             if not patterns:
                 await asyncio.sleep(interval_seconds)
                 continue
-            # 80% use best pattern, 20% random pattern to spread usage
             if random.random() < 0.2 and len(patterns) > 1:
                 pattern = random.choice(patterns)
             else:
@@ -300,7 +298,6 @@ async def continuous_self_play(interval_seconds=2):
             response = call_ai(prompt, pattern["temperature"], "deepseek")
             rating = rate_response_with_judge(response)
 
-            # Update pattern directly (like feedback)
             patterns = load_patterns()
             for p in patterns:
                 if p["id"] == pattern["id"]:
@@ -313,7 +310,6 @@ async def continuous_self_play(interval_seconds=2):
                     break
             save_patterns(patterns)
 
-            # Auto‑trigger evolution after every 5 total uses
             total_uses = sum(p.get("uses", 0) for p in patterns)
             if total_uses > 0 and total_uses % 5 == 0:
                 await run_evolution_background()
@@ -322,12 +318,11 @@ async def continuous_self_play(interval_seconds=2):
             print(f"Self‑play error: {e}")
         await asyncio.sleep(interval_seconds)
 
-# Start the background task when the app starts
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(continuous_self_play(interval_seconds=2))
 
-# ==================== CHAT HISTORY ====================
+# -------------------- CHAT HISTORY --------------------
 CONVERSATIONS_FILE = "conversations.json"
 
 def load_conversations():
@@ -386,12 +381,278 @@ async def get_chat_history(conversation_id: str):
             return conv["messages"]
     raise HTTPException(404, "Conversation not found")
 
-# ==================== DEBUG (Optional) ====================
+# -------------------- BUSINESS --------------------
+BUSINESS_FILE = "businesses.json"
+
+def load_businesses():
+    try:
+        with open(BUSINESS_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_businesses(businesses):
+    with open(BUSINESS_FILE, "w") as f:
+        json.dump(businesses, f, indent=2)
+
+class BusinessCreate(BaseModel):
+    name: str
+    niche: str
+    tone: str
+
+@app.post("/api/business/create")
+async def create_business(biz: BusinessCreate):
+    businesses = load_businesses()
+    new_biz = {
+        "id": f"biz_{len(businesses)+1}_{int(datetime.utcnow().timestamp())}",
+        "name": biz.name,
+        "niche": biz.niche,
+        "tone": biz.tone,
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    businesses.append(new_biz)
+    save_businesses(businesses)
+    return {"status": "created", "business": new_biz}
+
+@app.get("/api/business/list")
+async def list_businesses():
+    return load_businesses()
+
+# -------------------- PREDICTIVE --------------------
+PREDICTIONS_FILE = "predictions.json"
+
+def load_predictions():
+    try:
+        with open(PREDICTIONS_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_predictions(preds):
+    with open(PREDICTIONS_FILE, "w") as f:
+        json.dump(preds, f, indent=2)
+
+class PredictionRequest(BaseModel):
+    topic: str
+    participants: List[str]
+    pre_reading: bool
+
+def calculate_risk(req: PredictionRequest):
+    risk = 0.2
+    if not req.pre_reading:
+        risk += 0.3
+    if len(req.participants) > 5:
+        risk += 0.2
+    if any(word in req.topic.lower() for word in ["critical", "urgent", "sensitive"]):
+        risk += 0.2
+    return min(1.0, risk)
+
+@app.post("/api/predict")
+async def predict(req: PredictionRequest):
+    risk = calculate_risk(req)
+    pred_id = f"pred_{len(load_predictions())+1}_{int(datetime.utcnow().timestamp())}"
+    pred = {
+        "id": pred_id,
+        "risk": risk,
+        "input": req.dict(),
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    preds = load_predictions()
+    preds.append(pred)
+    save_predictions(preds)
+    return {"risk": risk, "prediction_id": pred_id, "action": "generate briefing note" if risk > 0.7 else "monitor"}
+
+@app.post("/api/predict/outcome")
+async def record_outcome(data: dict):
+    pred_id = data.get("prediction_id")
+    outcome = data.get("outcome")  # "success" or "failure"
+    preds = load_predictions()
+    for p in preds:
+        if p["id"] == pred_id:
+            p["outcome"] = outcome
+            save_predictions(preds)
+            return {"status": "recorded"}
+    raise HTTPException(404, "Prediction not found")
+
+# -------------------- TELEMETRY --------------------
+TELEMETRY_FILE = "telemetry.json"
+
+def load_telemetry():
+    try:
+        with open(TELEMETRY_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {"users": 0, "versions": {"v50.0": 68}, "actions": []}
+
+def save_telemetry(tele):
+    with open(TELEMETRY_FILE, "w") as f:
+        json.dump(tele, f, indent=2)
+
+@app.post("/api/telemetry/action")
+async def track_action(data: dict):
+    tele = load_telemetry()
+    tele["actions"].append({
+        "action": data.get("action"),
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_agent": data.get("user_agent", "")
+    })
+    tele["users"] = len(set(a.get("user_agent") for a in tele["actions"]))
+    save_telemetry(tele)
+    return {"status": "recorded"}
+
+@app.get("/api/telemetry/summary")
+async def get_telemetry():
+    return load_telemetry()
+
+# -------------------- PRODUCTS --------------------
+PRODUCTS_FILE = "products.json"
+
+def load_products():
+    try:
+        with open(PRODUCTS_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_products(products):
+    with open(PRODUCTS_FILE, "w") as f:
+        json.dump(products, f, indent=2)
+
+class ProductCreate(BaseModel):
+    name: str
+    type: str
+
+@app.post("/api/product/create")
+async def create_product(prod: ProductCreate):
+    products = load_products()
+    new_prod = {
+        "id": f"prod_{len(products)+1}_{int(datetime.utcnow().timestamp())}",
+        "name": prod.name,
+        "type": prod.type,
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    products.append(new_prod)
+    save_products(products)
+    return {"status": "created", "product": new_prod}
+
+@app.get("/api/product/list")
+async def list_products():
+    return load_products()
+
+# -------------------- SWARM --------------------
+SHARED_METRICS = {"instances": [], "last_share": None}
+
+@app.post("/api/swarm/share")
+async def share_metrics(data: dict):
+    SHARED_METRICS["instances"].append(data)
+    SHARED_METRICS["last_share"] = datetime.utcnow().isoformat()
+    return {"status": "shared"}
+
+@app.get("/api/swarm/insights")
+async def get_swarm():
+    return SHARED_METRICS
+
+# -------------------- INGEST --------------------
+INGESTED_FILES = []
+
+@app.post("/api/ingest/file")
+async def ingest_file(file: UploadFile = File(...)):
+    content = (await file.read()).decode("utf-8", errors="ignore")
+    INGESTED_FILES.append({
+        "filename": file.filename,
+        "content": content[:500],
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    return {"status": "ingested", "preview": content[:200]}
+
+@app.get("/api/ingest/list")
+async def list_ingested():
+    return INGESTED_FILES[-20:]
+
+# -------------------- ROBOT --------------------
+ROBOT_STATES = {}
+
+@app.post("/api/robot/command")
+async def robot_command(data: dict):
+    robot_id = data.get("robot_id")
+    command = data.get("command")
+    ROBOT_STATES[robot_id] = {"last_command": command, "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "executed", "simulated": True}
+
+@app.get("/api/robot/status/{robot_id}")
+async def robot_status(robot_id: str):
+    return ROBOT_STATES.get(robot_id, {"status": "unknown"})
+
+# -------------------- EARTH --------------------
+EARTH_SITES = [
+    {"name": "Hidden Temple", "lat": 13.4125, "lng": 122.5625},
+    {"name": "Shipwreck Cove", "lat": 11.9971, "lng": 121.9220},
+    {"name": "Crystal Cave", "lat": 14.6760, "lng": 121.0437}
+]
+NFT_MINTED = []
+
+@app.post("/api/earth/query")
+async def query_earth(data: dict):
+    lat = data.get("lat")
+    lng = data.get("lng")
+    # return all sites for simplicity
+    return {"sites": EARTH_SITES}
+
+@app.post("/api/earth/mint_nft")
+async def mint_nft(data: dict):
+    site_name = data.get("site_name")
+    if site_name in [s["name"] for s in EARTH_SITES]:
+        nft_id = f"nft_{site_name.replace(' ', '_')}_{int(datetime.utcnow().timestamp())}"
+        NFT_MINTED.append({"nft_id": nft_id, "site": site_name, "timestamp": datetime.utcnow().isoformat()})
+        return {"status": "minted", "nft_id": nft_id}
+    raise HTTPException(404, "Site not found")
+
+# -------------------- DOCS --------------------
+@app.get("/api/docs/report")
+async def generate_report():
+    patterns = load_patterns()
+    state = load_state()
+    convos = load_conversations()
+    report = f"""# LROS System Report
+Date: {datetime.utcnow().isoformat()}
+
+## Evolution Progress
+- Current Phase: {state['current_phase']}/9
+- Bond Status: {state['bond_status']}
+
+## Patterns
+| ID | Prompt | Rating | Uses |
+|----|--------|--------|------|
+"""
+    for p in patterns:
+        report += f"| {p['id']} | {p['prompt'][:50]} | {p['rating']:.2f} | {p['uses']} |\n"
+    report += "\n## Recent Logs\n"
+    for log in state.get("logs", [])[-20:]:
+        report += f"- {log['timestamp']}: {log['message']}\n"
+    report += "\n## Conversations\n"
+    for c in convos:
+        report += f"- {c['name']}: {len(c['messages'])} messages\n"
+    return {"report": report}
+
+# -------------------- DEBUG --------------------
 @app.get("/debug/patterns")
 def debug_patterns():
     return load_patterns()
 
-# ==================== ROOT ====================
 @app.get("/")
 def root():
     return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
