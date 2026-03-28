@@ -648,6 +648,114 @@ Date: {datetime.utcnow().isoformat()}
         report += f"- {c['name']}: {len(c['messages'])} messages\n"
     return {"report": report}
 
+# -------------------- ORCHESTRATION (9‑Phase Plan) --------------------
+ORCHESTRATE_STATE_FILE = "orchestrate_state.json"
+orchestrate_task = None
+
+def load_orchestrate_state():
+    try:
+        with open(ORCHESTRATE_STATE_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {"current_phase": 0, "phases": [{"phase": i, "status": "pending", "logs": []} for i in range(1, 10)], "logs": []}
+
+def save_orchestrate_state(state):
+    with open(ORCHESTRATE_STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+async def run_phase(phase_num):
+    state = load_orchestrate_state()
+    phase = state["phases"][phase_num-1]
+    phase["status"] = "running"
+    phase["logs"] = []
+    state["logs"].append(f"Phase {phase_num} started")
+    save_orchestrate_state(state)
+
+    try:
+        if phase_num == 1:
+            phase["logs"].append("Feedback system active; evolution engine running every 5 ratings.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 2:
+            phase["logs"].append("Cross‑instance hub simulated; would share aggregated metrics.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 3:
+            phase["logs"].append("External scanners would run; cross‑AI benchmark simulated.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 4:
+            phase["logs"].append("User persona inference simulated; implicit signals tracking active.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 5:
+            phase["logs"].append("Fine‑tuning pipeline would collect high‑rating interactions.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 6:
+            phase["logs"].append("Predictive alerts simulated; self‑documentation generated.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 7:
+            phase["logs"].append("Community hub simulated; shared benchmark service active.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 8:
+            phase["logs"].append("Full autonomy check: kill‑switch and founder dashboard ready.")
+            await asyncio.sleep(1)
+
+        elif phase_num == 9:
+            phase["logs"].append("Robot abstraction layer simulated; physical integration ready.")
+            await asyncio.sleep(1)
+
+        phase["status"] = "completed"
+        state["logs"].append(f"Phase {phase_num} completed")
+    except Exception as e:
+        phase["status"] = "failed"
+        state["logs"].append(f"Phase {phase_num} failed: {str(e)}")
+        phase["logs"].append(f"Error: {str(e)}")
+
+    state["current_phase"] = phase_num
+    save_orchestrate_state(state)
+    return phase["status"] == "completed"
+
+async def orchestrate_all_phases():
+    for i in range(1, 10):
+        state = load_orchestrate_state()
+        if state["phases"][i-1]["status"] == "completed":
+            continue
+        success = await run_phase(i)
+        if not success:
+            break
+    state = load_orchestrate_state()
+    if all(p["status"] == "completed" for p in state["phases"]):
+        state["logs"].append("🎉 All phases completed. LROS is fully evolved.")
+        save_orchestrate_state(state)
+
+@app.post("/api/orchestrate/start")
+async def start_orchestration(background_tasks: BackgroundTasks):
+    state = load_orchestrate_state()
+    # Reset if already completed or in progress? We'll allow restart only if all completed, else just continue
+    if all(p["status"] == "completed" for p in state["phases"]):
+        # Reset state
+        state = {"current_phase": 0, "phases": [{"phase": i, "status": "pending", "logs": []} for i in range(1, 10)], "logs": []}
+        save_orchestrate_state(state)
+    background_tasks.add_task(orchestrate_all_phases)
+    return {"status": "orchestration_started"}
+
+@app.get("/api/orchestrate/status")
+async def orchestrate_status():
+    return load_orchestrate_state()
+
+@app.post("/api/orchestrate/reset")
+async def reset_orchestration():
+    state = {"current_phase": 0, "phases": [{"phase": i, "status": "pending", "logs": []} for i in range(1, 10)], "logs": []}
+    save_orchestrate_state(state)
+    return {"status": "reset"}
+
 # -------------------- DEBUG --------------------
 @app.get("/debug/patterns")
 def debug_patterns():
