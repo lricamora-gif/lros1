@@ -12,6 +12,7 @@ import cohere
 from datetime import datetime
 from typing import Optional, List
 import asyncio
+import re
 
 app = FastAPI(title="LROS Ultimate Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -48,8 +49,18 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-# -------------------- MULTI‑AI CALLER --------------------
-def call_ai(prompt, temperature=0.7, model="openai"):
+# -------------------- MULTI‑AI CALLER (DEEPSEEK DEFAULT) --------------------
+def call_ai(prompt, temperature=0.7, model="deepseek"):
+    # Try DeepSeek first if key exists
+    if model == "deepseek" and DEEPSEEK_API_KEY:
+        try:
+            headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+            payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "temperature": temperature}
+            response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers)
+            return response.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"DeepSeek error: {e}")
+    # Fallbacks (optional)
     if model == "openai" and openai.api_key:
         try:
             response = openai.ChatCompletion.create(
@@ -78,14 +89,6 @@ def call_ai(prompt, temperature=0.7, model="openai"):
             return response.content[0].text
         except Exception as e:
             print(f"Claude error: {e}")
-    if model == "deepseek" and DEEPSEEK_API_KEY:
-        try:
-            headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
-            payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "temperature": temperature}
-            response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers)
-            return response.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            print(f"DeepSeek error: {e}")
     if model == "cohere" and cohere_client:
         try:
             response = cohere_client.generate(
@@ -166,7 +169,7 @@ async def submit_feedback(feedback: Feedback, background_tasks: BackgroundTasks)
 class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
-    model: Optional[str] = "openai"
+    model: Optional[str] = "deepseek"   # default deepseek
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
@@ -200,19 +203,22 @@ def mutate_pattern(pattern):
     return new
 
 def evaluate_pattern(pattern, test_inputs=None):
+    """Evaluates a pattern by generating responses to test inputs and rating them using DeepSeek."""
     if not test_inputs:
         test_inputs = ["What is machine learning?", "Explain quantum computing simply", "How do I start coding?"]
     total = 0
     for query in test_inputs:
         prompt = pattern["prompt"].format(topic=query)
-        response = call_ai(prompt, pattern["temperature"])
-        judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless):\n\nResponse: {response}\n\nRating (just a number):"
-        judge_resp = call_ai(judge_prompt, 0)
+        response = call_ai(prompt, pattern["temperature"], model="deepseek")
+        judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless). Return only a single number, nothing else.\n\nResponse: {response}\n\nRating:"
+        judge_resp = call_ai(judge_prompt, temperature=0, model="deepseek")
         try:
             score = float(judge_resp.strip())
         except:
-            score = 0.5
-        total += score
+            # fallback: extract first number
+            numbers = re.findall(r"[\d.]+", judge_resp)
+            score = float(numbers[0]) if numbers else 0.5
+        total += max(0.0, min(1.0, score))
     return total / len(test_inputs)
 
 @app.post("/api/evolve")
@@ -274,13 +280,14 @@ SELF_PLAY_TOPICS = [
 ]
 
 def rate_response_with_judge(response):
-    judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless):\n\nResponse: {response}\n\nRating (just a number):"
-    judge_resp = call_ai(judge_prompt, 0, "deepseek")
+    judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless). Return only a number.\n\nResponse: {response}\n\nRating:"
+    judge_resp = call_ai(judge_prompt, temperature=0, model="deepseek")
     try:
         rating = float(judge_resp.strip())
         return max(0.0, min(1.0, rating))
     except:
-        return 0.5
+        numbers = re.findall(r"[\d.]+", judge_resp)
+        return float(numbers[0]) if numbers else 0.5
 
 async def continuous_self_play(interval_seconds=2):
     while True:
@@ -295,7 +302,7 @@ async def continuous_self_play(interval_seconds=2):
                 pattern = max(patterns, key=lambda p: p["rating"])
             topic = random.choice(SELF_PLAY_TOPICS)
             prompt = pattern["prompt"].format(topic=topic)
-            response = call_ai(prompt, pattern["temperature"], "deepseek")
+            response = call_ai(prompt, pattern["temperature"], model="deepseek")
             rating = rate_response_with_judge(response)
 
             patterns = load_patterns()
@@ -609,7 +616,6 @@ NFT_MINTED = []
 async def query_earth(data: dict):
     lat = data.get("lat")
     lng = data.get("lng")
-    # return all sites for simplicity
     return {"sites": EARTH_SITES}
 
 @app.post("/api/earth/mint_nft")
@@ -678,46 +684,36 @@ async def run_phase(phase_num):
         if phase_num == 1:
             phase["logs"].append("Feedback system active; evolution engine running every 5 ratings.")
             await asyncio.sleep(1)
-
         elif phase_num == 2:
             phase["logs"].append("Cross‑instance hub simulated; would share aggregated metrics.")
             await asyncio.sleep(1)
-
         elif phase_num == 3:
             phase["logs"].append("External scanners would run; cross‑AI benchmark simulated.")
             await asyncio.sleep(1)
-
         elif phase_num == 4:
             phase["logs"].append("User persona inference simulated; implicit signals tracking active.")
             await asyncio.sleep(1)
-
         elif phase_num == 5:
             phase["logs"].append("Fine‑tuning pipeline would collect high‑rating interactions.")
             await asyncio.sleep(1)
-
         elif phase_num == 6:
             phase["logs"].append("Predictive alerts simulated; self‑documentation generated.")
             await asyncio.sleep(1)
-
         elif phase_num == 7:
             phase["logs"].append("Community hub simulated; shared benchmark service active.")
             await asyncio.sleep(1)
-
         elif phase_num == 8:
             phase["logs"].append("Full autonomy check: kill‑switch and founder dashboard ready.")
             await asyncio.sleep(1)
-
         elif phase_num == 9:
             phase["logs"].append("Robot abstraction layer simulated; physical integration ready.")
             await asyncio.sleep(1)
-
         phase["status"] = "completed"
         state["logs"].append(f"Phase {phase_num} completed")
     except Exception as e:
         phase["status"] = "failed"
         state["logs"].append(f"Phase {phase_num} failed: {str(e)}")
         phase["logs"].append(f"Error: {str(e)}")
-
     state["current_phase"] = phase_num
     save_orchestrate_state(state)
     return phase["status"] == "completed"
@@ -738,9 +734,7 @@ async def orchestrate_all_phases():
 @app.post("/api/orchestrate/start")
 async def start_orchestration(background_tasks: BackgroundTasks):
     state = load_orchestrate_state()
-    # Reset if already completed or in progress? We'll allow restart only if all completed, else just continue
     if all(p["status"] == "completed" for p in state["phases"]):
-        # Reset state
         state = {"current_phase": 0, "phases": [{"phase": i, "status": "pending", "logs": []} for i in range(1, 10)], "logs": []}
         save_orchestrate_state(state)
     background_tasks.add_task(orchestrate_all_phases)
