@@ -386,6 +386,11 @@ async def get_chat_history(conversation_id: str):
             return conv["messages"]
     raise HTTPException(404, "Conversation not found")
 
+# ==================== DEBUG (Optional) ====================
+@app.get("/debug/patterns")
+def debug_patterns():
+    return load_patterns()
+
 # ==================== ROOT ====================
 @app.get("/")
 def root():
