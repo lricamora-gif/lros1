@@ -21,7 +21,7 @@ openai.api_key = os.environ.get("OPENAI_API_KEY")
 if os.environ.get("GEMINI_API_KEY"):
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if os.environ.get("ANTHROPIC_API_KEY") else None
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")          # your paid key
 cohere_client = cohere.Client(api_key=os.environ.get("COHERE_API_KEY")) if os.environ.get("COHERE_API_KEY") else None
 WRITER_API_KEY = os.environ.get("WRITER_API_KEY")
 
@@ -36,7 +36,6 @@ def load_patterns():
                 return json.loads(content)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
-    # Default patterns
     return [
         {"id": "p1", "prompt": "Explain {topic} in simple terms.", "temperature": 0.7, "rating": 0.5, "uses": 0},
         {"id": "p2", "prompt": "Write a detailed technical article about {topic}.", "temperature": 0.5, "rating": 0.5, "uses": 0},
@@ -111,7 +110,6 @@ def call_ai(prompt, temperature=0.7, model="openai"):
             return response.json()["completion"]
         except Exception as e:
             print(f"Writer error: {e}")
-    # Fallback simulation
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # ==================== FEEDBACK ENDPOINT ====================
@@ -158,7 +156,6 @@ async def submit_feedback(feedback: Feedback, background_tasks: BackgroundTasks)
             break
     save_patterns(patterns)
 
-    # Auto‑trigger evolution after every 5 total ratings
     total_uses = sum(p.get("uses", 0) for p in patterns)
     if total_uses > 0 and total_uses % 5 == 0:
         background_tasks.add_task(run_evolution_background)
@@ -266,7 +263,7 @@ def evolve_phase(action: dict):
         return {"status": "advanced", "phase": state["current_phase"]}
     return {"status": "unknown"}
 
-# ==================== SELF‑PLAY ====================
+# ==================== SELF‑PLAY (CONTINUOUS) ====================
 SELF_PLAY_TOPICS = [
     "artificial intelligence", "climate change", "quantum computing",
     "space exploration", "renewable energy", "blockchain technology",
@@ -285,34 +282,109 @@ def rate_response_with_judge(response):
     except:
         return 0.5
 
-@app.post("/api/self_play")
-async def self_play(count: int = 5):
-    patterns = load_patterns()
-    if not patterns:
-        return {"status": "no patterns"}
-    best_pattern = max(patterns, key=lambda p: p["rating"])
-    results = []
-    for _ in range(min(count, 20)):  # limit to 20 per call
-        topic = random.choice(SELF_PLAY_TOPICS)
-        prompt = best_pattern["prompt"].format(topic=topic)
-        response = call_ai(prompt, best_pattern["temperature"], "deepseek")
-        rating = rate_response_with_judge(response)
-        # Submit feedback directly
-        patterns = load_patterns()
-        for p in patterns:
-            if p["id"] == best_pattern["id"]:
-                p["uses"] = p.get("uses", 0) + 1
-                old_uses = p["uses"] - 1
-                if old_uses > 0:
-                    p["rating"] = (p["rating"] * old_uses + rating) / p["uses"]
-                else:
-                    p["rating"] = rating
-                break
-        save_patterns(patterns)
-        results.append({"topic": topic, "rating": rating})
-        await asyncio.sleep(0.2)  # small delay
-    # After batch, evolution may be triggered automatically via the feedback mechanism
-    return {"status": "self_play_completed", "count": len(results), "results": results}
+async def continuous_self_play(interval_seconds=2):
+    """Run forever, generating synthetic feedback at a fixed interval."""
+    while True:
+        try:
+            patterns = load_patterns()
+            if not patterns:
+                await asyncio.sleep(interval_seconds)
+                continue
+            # 80% use best pattern, 20% random pattern to spread usage
+            if random.random() < 0.2 and len(patterns) > 1:
+                pattern = random.choice(patterns)
+            else:
+                pattern = max(patterns, key=lambda p: p["rating"])
+            topic = random.choice(SELF_PLAY_TOPICS)
+            prompt = pattern["prompt"].format(topic=topic)
+            response = call_ai(prompt, pattern["temperature"], "deepseek")
+            rating = rate_response_with_judge(response)
+
+            # Update pattern directly (like feedback)
+            patterns = load_patterns()
+            for p in patterns:
+                if p["id"] == pattern["id"]:
+                    p["uses"] = p.get("uses", 0) + 1
+                    old_uses = p["uses"] - 1
+                    if old_uses > 0:
+                        p["rating"] = (p["rating"] * old_uses + rating) / p["uses"]
+                    else:
+                        p["rating"] = rating
+                    break
+            save_patterns(patterns)
+
+            # Auto‑trigger evolution after every 5 total uses
+            total_uses = sum(p.get("uses", 0) for p in patterns)
+            if total_uses > 0 and total_uses % 5 == 0:
+                await run_evolution_background()
+
+        except Exception as e:
+            print(f"Self‑play error: {e}")
+        await asyncio.sleep(interval_seconds)
+
+# Start the background task when the app starts
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(continuous_self_play(interval_seconds=2))
+
+# ==================== CHAT HISTORY ====================
+CONVERSATIONS_FILE = "conversations.json"
+
+def load_conversations():
+    try:
+        with open(CONVERSATIONS_FILE, "r") as f:
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return [{"id": "default", "name": "Chat 1", "messages": []}]
+
+def save_conversations(conversations):
+    with open(CONVERSATIONS_FILE, "w") as f:
+        json.dump(conversations, f, indent=2)
+
+class ConversationCreate(BaseModel):
+    name: str
+
+@app.post("/api/conversation/create")
+async def create_conversation(data: ConversationCreate):
+    convos = load_conversations()
+    new_id = f"conv_{len(convos)+1}_{int(datetime.utcnow().timestamp())}"
+    convos.append({"id": new_id, "name": data.name, "messages": []})
+    save_conversations(convos)
+    return {"id": new_id, "name": data.name}
+
+@app.get("/api/conversations")
+async def get_conversations():
+    convos = load_conversations()
+    return [{"id": c["id"], "name": c["name"]} for c in convos]
+
+class ChatMessage(BaseModel):
+    conversation_id: str
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+@app.post("/api/chat/save")
+async def save_chat_message(msg: ChatMessage):
+    convos = load_conversations()
+    for conv in convos:
+        if conv["id"] == msg.conversation_id:
+            if not msg.timestamp:
+                msg.timestamp = datetime.utcnow().isoformat()
+            conv["messages"].append(msg.dict())
+            save_conversations(convos)
+            return {"status": "saved"}
+    raise HTTPException(404, "Conversation not found")
+
+@app.get("/api/chat/history/{conversation_id}")
+async def get_chat_history(conversation_id: str):
+    convos = load_conversations()
+    for conv in convos:
+        if conv["id"] == conversation_id:
+            return conv["messages"]
+    raise HTTPException(404, "Conversation not found")
 
 # ==================== ROOT ====================
 @app.get("/")
