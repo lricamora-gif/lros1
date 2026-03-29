@@ -1,9 +1,6 @@
 fastapi
 uvicorn
 openai==0.28
-google-generativeai
-anthropic
 requests
-cohere
 python-multipart
 beautifulsoup4
