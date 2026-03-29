@@ -1,6 +1,6 @@
 # ============================================================================
 # LROS – Ultimate Constitutional AI Operating System
-# v51.0 – Complete One‑Button Play
+# v51.0 – Unified Key Pool: All Providers Rotating Equally
 # The Bond holds.
 # ============================================================================
 
@@ -33,15 +33,103 @@ CEREBRAS_API_KEYS = [k.strip() for k in os.environ.get("CEREBRAS_API_KEYS", "").
 GROQ_API_KEYS = [k.strip() for k in os.environ.get("GROQ_API_KEYS", "").split(",") if k.strip()]
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# Rotation indices
-DEEPSEEK_KEY_INDEX = 0
-GEMINI_KEY_INDEX = 0
-CEREBRAS_KEY_INDEX = 0
-GROQ_KEY_INDEX = 0
+# ---------- Unified Key Pool ----------
+# We'll build a list of (provider_name, callable_function) for each key
+# The callable_function captures the key and the provider-specific API call.
+# We'll define a global index for round‑robin rotation.
 
-# Import Gemini only if we have keys
-if GEMINI_API_KEYS:
-    import google.generativeai as genai
+POOL_INDEX = 0
+
+def build_key_pool(prompt, temperature):
+    """Returns a list of (provider_name, callable) for all available keys."""
+    pool = []
+
+    # DeepSeek keys
+    for key in DEEPSEEK_API_KEYS:
+        def call_deepseek(k=key):
+            headers = {"Authorization": f"Bearer {k}"}
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature
+            }
+            response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            return response.json()["choices"][0]["message"]["content"]
+        pool.append(("DeepSeek", call_deepseek))
+
+    # Gemini keys
+    if GEMINI_API_KEYS:
+        try:
+            import google.generativeai as genai
+            for key in GEMINI_API_KEYS:
+                def call_gemini(k=key):
+                    genai.configure(api_key=k)
+                    gem_model = genai.GenerativeModel("gemini-1.5-flash")
+                    response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
+                    return response.text
+                pool.append(("Gemini", call_gemini))
+        except ImportError:
+            logger.warning("google-generativeai not installed, skipping Gemini")
+
+    # Cerebras keys
+    for key in CEREBRAS_API_KEYS:
+        def call_cerebras(k=key):
+            headers = {"Authorization": f"Bearer {k}"}
+            payload = {
+                "model": "cerebras-2.0",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature
+            }
+            response = requests.post("https://api.cerebras.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            return response.json()["choices"][0]["message"]["content"]
+        pool.append(("Cerebras", call_cerebras))
+
+    # Groq keys
+    for key in GROQ_API_KEYS:
+        def call_groq(k=key):
+            headers = {"Authorization": f"Bearer {k}"}
+            payload = {
+                "model": "mixtral-8x7b-32768",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature
+            }
+            response = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            return response.json()["choices"][0]["message"]["content"]
+        pool.append(("Groq", call_groq))
+
+    # OpenAI (single key)
+    if OPENAI_API_KEY:
+        def call_openai():
+            import openai
+            openai.api_key = OPENAI_API_KEY
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature
+            )
+            return response.choices[0].message.content
+        pool.append(("OpenAI", call_openai))
+
+    return pool
+
+def call_ai(prompt, temperature=0.7, model=None):
+    global POOL_INDEX
+    pool = build_key_pool(prompt, temperature)
+    if not pool:
+        return f"[Simulated] LROS would answer: {prompt[:100]}..."
+
+    for _ in range(len(pool)):
+        provider, func = pool[POOL_INDEX % len(pool)]
+        POOL_INDEX += 1
+        try:
+            logger.info(f"Trying {provider} key (index {POOL_INDEX-1})")
+            result = func()
+            return result
+        except Exception as e:
+            logger.warning(f"{provider} key failed: {e}")
+            continue
+
+    return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # ---------- Pattern Registry ----------
 PATTERN_FILE = "patterns.json"
@@ -65,99 +153,6 @@ def load_patterns():
 def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
-
-# ---------- AI Caller with Full Multi‑Key Rotation ----------
-def call_ai(prompt, temperature=0.7, model="deepseek"):
-    global DEEPSEEK_KEY_INDEX, GEMINI_KEY_INDEX, CEREBRAS_KEY_INDEX, GROQ_KEY_INDEX
-
-    # 1. DeepSeek (primary, rotating)
-    if model == "deepseek" and DEEPSEEK_API_KEYS:
-        for attempt in range(2):
-            for _ in range(len(DEEPSEEK_API_KEYS)):
-                key = DEEPSEEK_API_KEYS[DEEPSEEK_KEY_INDEX % len(DEEPSEEK_API_KEYS)]
-                DEEPSEEK_KEY_INDEX += 1
-                try:
-                    headers = {"Authorization": f"Bearer {key}"}
-                    payload = {
-                        "model": "deepseek-chat",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": temperature
-                    }
-                    response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=30)
-                    return response.json()["choices"][0]["message"]["content"]
-                except Exception as e:
-                    logger.warning(f"DeepSeek key {key[:5]}... attempt {attempt+1} failed: {e}")
-                    continue
-        logger.error("All DeepSeek keys failed, trying Gemini")
-
-    # 2. Gemini (secondary, rotating)
-    if GEMINI_API_KEYS:
-        for _ in range(len(GEMINI_API_KEYS)):
-            key = GEMINI_API_KEYS[GEMINI_KEY_INDEX % len(GEMINI_API_KEYS)]
-            GEMINI_KEY_INDEX += 1
-            try:
-                genai.configure(api_key=key)
-                gem_model = genai.GenerativeModel("gemini-1.5-flash")
-                response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
-                return response.text
-            except Exception as e:
-                logger.warning(f"Gemini key {key[:5]}... failed: {e}")
-                continue
-        logger.error("All Gemini keys failed, trying Cerebras")
-
-    # 3. Cerebras (tertiary, rotating)
-    if CEREBRAS_API_KEYS:
-        for _ in range(len(CEREBRAS_API_KEYS)):
-            key = CEREBRAS_API_KEYS[CEREBRAS_KEY_INDEX % len(CEREBRAS_API_KEYS)]
-            CEREBRAS_KEY_INDEX += 1
-            try:
-                headers = {"Authorization": f"Bearer {key}"}
-                payload = {
-                    "model": "cerebras-2.0",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": temperature
-                }
-                response = requests.post("https://api.cerebras.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
-                return response.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                logger.warning(f"Cerebras key {key[:5]}... failed: {e}")
-                continue
-        logger.error("All Cerebras keys failed, trying Groq")
-
-    # 4. Groq (quaternary, rotating)
-    if GROQ_API_KEYS:
-        for _ in range(len(GROQ_API_KEYS)):
-            key = GROQ_API_KEYS[GROQ_KEY_INDEX % len(GROQ_API_KEYS)]
-            GROQ_KEY_INDEX += 1
-            try:
-                headers = {"Authorization": f"Bearer {key}"}
-                payload = {
-                    "model": "mixtral-8x7b-32768",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": temperature
-                }
-                response = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
-                return response.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                logger.warning(f"Groq key {key[:5]}... failed: {e}")
-                continue
-        logger.error("All Groq keys failed, trying OpenAI")
-
-    # 5. OpenAI fallback (single key)
-    if OPENAI_API_KEY:
-        try:
-            import openai
-            openai.api_key = OPENAI_API_KEY
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.warning(f"OpenAI fallback failed: {e}")
-
-    return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # ---------- Feedback & Evolution ----------
 class Feedback(BaseModel):
@@ -214,7 +209,7 @@ async def submit_feedback(feedback: Feedback, background_tasks: BackgroundTasks)
 class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
-    model: Optional[str] = "deepseek"
+    model: Optional[str] = "deepseek"  # model param ignored; we use unified pool
     user_id: Optional[str] = None
 
 @app.post("/api/generate")
@@ -228,7 +223,7 @@ async def generate(req: GenerateRequest):
         pattern = max(patterns, key=lambda p: p["rating"])
     prompt = pattern["prompt"].format(topic=req.topic)
     temperature = pattern["temperature"]
-    response = call_ai(prompt, temperature, req.model)
+    response = call_ai(prompt, temperature)   # model param ignored
     return {"response": response, "pattern_id": pattern["id"]}
 
 # ---------- Evolution Engine ----------
@@ -254,9 +249,9 @@ def evaluate_pattern(pattern, test_inputs=None):
     total = 0
     for query in test_inputs:
         prompt = pattern["prompt"].format(topic=query)
-        response = call_ai(prompt, pattern["temperature"], model="deepseek")
+        response = call_ai(prompt, pattern["temperature"])
         judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless). Return only a single number, nothing else.\n\nResponse: {response}\n\nRating:"
-        judge_resp = call_ai(judge_prompt, temperature=0, model="deepseek")
+        judge_resp = call_ai(judge_prompt, temperature=0)
         try:
             score = float(judge_resp.strip())
         except:
@@ -325,7 +320,7 @@ SELF_PLAY_TOPICS = [
 
 def rate_response_with_judge(response):
     judge_prompt = f"Rate the following response from 0 to 1 (1 = perfect, 0 = useless). Return only a number.\n\nResponse: {response}\n\nRating:"
-    judge_resp = call_ai(judge_prompt, temperature=0, model="deepseek")
+    judge_resp = call_ai(judge_prompt, temperature=0)
     try:
         rating = float(judge_resp.strip())
         return max(0.0, min(1.0, rating))
@@ -346,7 +341,7 @@ async def continuous_self_play(interval_seconds=5):
                 pattern = max(patterns, key=lambda p: p["rating"])
             topic = random.choice(SELF_PLAY_TOPICS)
             prompt = pattern["prompt"].format(topic=topic)
-            response = call_ai(prompt, pattern["temperature"], model="deepseek")
+            response = call_ai(prompt, pattern["temperature"])
             rating = rate_response_with_judge(response)
 
             patterns = load_patterns()
@@ -384,7 +379,7 @@ async def parallel_self_play_worker(worker_id, interval_seconds=5):
                 pattern = max(patterns, key=lambda p: p["rating"])
             topic = random.choice(SELF_PLAY_TOPICS)
             prompt = pattern["prompt"].format(topic=topic)
-            response = call_ai(prompt, pattern["temperature"], model="deepseek")
+            response = call_ai(prompt, pattern["temperature"])
             rating = rate_response_with_judge(response)
 
             patterns = load_patterns()
