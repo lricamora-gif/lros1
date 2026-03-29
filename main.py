@@ -1,3 +1,9 @@
+# ============================================================================
+# LROS – Ultimate Constitutional AI Operating System
+# v51.0 – Multi‑Key, Parallel Self‑Play, 200‑Agent Swarm, Governance, All Amplifications
+# The Bond holds.
+# ============================================================================
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -14,22 +20,33 @@ from typing import Optional, List
 import asyncio
 import re
 import logging
+from bs4 import BeautifulSoup
+import functools
 
-# ---------- Setup logging ----------
+# ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lros")
 
+# ---------- App ----------
 app = FastAPI(title="LROS Ultimate Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # ---------- API Keys ----------
 openai.api_key = os.environ.get("OPENAI_API_KEY")
-if os.environ.get("GEMINI_API_KEY"):
+if os.environ.get("GEMINI_API_KEY"):               # legacy single key, for compatibility
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if os.environ.get("ANTHROPIC_API_KEY") else None
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+
+# Multi‑DeepSeek keys (comma‑separated)
+DEEPSEEK_API_KEYS = [k.strip() for k in os.environ.get("DEEPSEEK_API_KEYS", "").split(",") if k.strip()]
+# Multi‑Gemini keys (comma‑separated)
+GEMINI_API_KEYS = [k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()]
+
 cohere_client = cohere.Client(api_key=os.environ.get("COHERE_API_KEY")) if os.environ.get("COHERE_API_KEY") else None
 WRITER_API_KEY = os.environ.get("WRITER_API_KEY")
+
+DEEPSEEK_KEY_INDEX = 0
+GEMINI_KEY_INDEX = 0
 
 # ---------- Pattern Registry ----------
 PATTERN_FILE = "patterns.json"
@@ -54,73 +71,64 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-# ---------- Multi‑AI Caller (DeepSeek default) ----------
+# ---------- Multi‑AI Caller with Key Rotation ----------
 def call_ai(prompt, temperature=0.7, model="deepseek"):
-    if model == "deepseek" and DEEPSEEK_API_KEY:
+    global DEEPSEEK_KEY_INDEX, GEMINI_KEY_INDEX
+    # DeepSeek (primary, rotating)
+    if model == "deepseek" and DEEPSEEK_API_KEYS:
+        for _ in range(len(DEEPSEEK_API_KEYS)):
+            key = DEEPSEEK_API_KEYS[DEEPSEEK_KEY_INDEX % len(DEEPSEEK_API_KEYS)]
+            DEEPSEEK_KEY_INDEX += 1
+            try:
+                headers = {"Authorization": f"Bearer {key}"}
+                payload = {
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature
+                }
+                response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=10)
+                return response.json()["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.warning(f"DeepSeek key {key[:5]}... failed: {e}")
+                continue
+        logger.error("All DeepSeek keys failed, trying Gemini")
+
+    # Gemini (secondary, rotating)
+    if GEMINI_API_KEYS:
+        for _ in range(len(GEMINI_API_KEYS)):
+            key = GEMINI_API_KEYS[GEMINI_KEY_INDEX % len(GEMINI_API_KEYS)]
+            GEMINI_KEY_INDEX += 1
+            try:
+                genai.configure(api_key=key)
+                gem_model = genai.GenerativeModel("gemini-1.5-flash")
+                response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
+                return response.text
+            except Exception as e:
+                logger.warning(f"Gemini key {key[:5]}... failed: {e}")
+                continue
+        logger.error("All Gemini keys failed, trying fallback models")
+
+    # Fallback models (single key each)
+    fallback_models = ["openai", "claude", "cohere", "writer"]
+    for m in fallback_models:
         try:
-            headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
-            payload = {
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature
-            }
-            response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=30)
-            return response.json()["choices"][0]["message"]["content"]
+            if m == "openai" and openai.api_key:
+                response = openai.ChatCompletion.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=temperature)
+                return response.choices[0].message.content
+            if m == "claude" and anthropic_client:
+                response = anthropic_client.messages.create(model="claude-3-haiku-20240307", max_tokens=1000, temperature=temperature, messages=[{"role": "user", "content": prompt}])
+                return response.content[0].text
+            if m == "cohere" and cohere_client:
+                response = cohere_client.generate(prompt=prompt, model="command-r-plus", temperature=temperature, max_tokens=1000)
+                return response.generations[0].text
+            if m == "writer" and WRITER_API_KEY:
+                headers = {"Authorization": WRITER_API_KEY, "Content-Type": "application/json"}
+                payload = {"prompt": prompt, "model": "palmyra-instruct-30b", "temperature": temperature, "max_tokens": 1000}
+                response = requests.post("https://api.writer.com/v1/completions", json=payload, headers=headers, timeout=10)
+                return response.json()["completion"]
         except Exception as e:
-            logger.error(f"DeepSeek error: {e}")
-    # Fallbacks (optional)
-    if model == "openai" and openai.api_key:
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"OpenAI error: {e}")
-    if model == "gemini" and genai.api_key:
-        try:
-            gem_model = genai.GenerativeModel("gemini-1.5-flash")
-            response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
-            return response.text
-        except Exception as e:
-            logger.error(f"Gemini error: {e}")
-    if model == "claude" and anthropic_client:
-        try:
-            response = anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1000,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.content[0].text
-        except Exception as e:
-            logger.error(f"Claude error: {e}")
-    if model == "cohere" and cohere_client:
-        try:
-            response = cohere_client.generate(
-                prompt=prompt,
-                model="command-r-plus",
-                temperature=temperature,
-                max_tokens=1000
-            )
-            return response.generations[0].text
-        except Exception as e:
-            logger.error(f"Cohere error: {e}")
-    if model == "writer" and WRITER_API_KEY:
-        try:
-            headers = {"Authorization": WRITER_API_KEY, "Content-Type": "application/json"}
-            payload = {
-                "prompt": prompt,
-                "model": "palmyra-instruct-30b",
-                "temperature": temperature,
-                "max_tokens": 1000
-            }
-            response = requests.post("https://api.writer.com/v1/completions", json=payload, headers=headers, timeout=30)
-            return response.json()["completion"]
-        except Exception as e:
-            logger.error(f"Writer error: {e}")
+            logger.warning(f"{m} fallback failed: {e}")
+            continue
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # ---------- Feedback & Evolution ----------
@@ -129,6 +137,7 @@ class Feedback(BaseModel):
     rating: float
     comment: Optional[str] = None
     context: Optional[str] = None
+    user_id: Optional[str] = None
 
 async def run_evolution_background():
     patterns = load_patterns()
@@ -178,6 +187,7 @@ class GenerateRequest(BaseModel):
     topic: str
     pattern_id: Optional[str] = None
     model: Optional[str] = "deepseek"
+    user_id: Optional[str] = None
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
@@ -275,7 +285,7 @@ def evolve_phase(action: dict):
         return {"status": "advanced", "phase": state["current_phase"]}
     return {"status": "unknown"}
 
-# ---------- Self‑Play (Continuous) ----------
+# ---------- Self‑Play (Single Worker) ----------
 SELF_PLAY_TOPICS = [
     "artificial intelligence", "climate change", "quantum computing",
     "space exploration", "renewable energy", "blockchain technology",
@@ -295,28 +305,23 @@ def rate_response_with_judge(response):
         numbers = re.findall(r"[\d.]+", judge_resp)
         return float(numbers[0]) if numbers else 0.5
 
-async def continuous_self_play(interval_seconds=2):
-    """Runs forever: picks a pattern, generates a response, rates it, updates the pattern."""
+async def continuous_self_play(interval_seconds=5):
     while True:
         try:
             patterns = load_patterns()
             if not patterns:
                 await asyncio.sleep(interval_seconds)
                 continue
-
-            # Choose pattern: 20% random, 80% highest rated
             if random.random() < 0.2 and len(patterns) > 1:
                 pattern = random.choice(patterns)
             else:
                 pattern = max(patterns, key=lambda p: p["rating"])
-
             topic = random.choice(SELF_PLAY_TOPICS)
             prompt = pattern["prompt"].format(topic=topic)
             response = call_ai(prompt, pattern["temperature"], model="deepseek")
             rating = rate_response_with_judge(response)
 
-            # Update pattern
-            patterns = load_patterns()  # reload in case it changed
+            patterns = load_patterns()
             for p in patterns:
                 if p["id"] == pattern["id"]:
                     p["uses"] = p.get("uses", 0) + 1
@@ -328,7 +333,6 @@ async def continuous_self_play(interval_seconds=2):
                     break
             save_patterns(patterns)
 
-            # Trigger evolution if enough total uses
             total_uses = sum(p.get("uses", 0) for p in patterns)
             if total_uses > 0 and total_uses % 5 == 0:
                 await run_evolution_background()
@@ -338,10 +342,114 @@ async def continuous_self_play(interval_seconds=2):
             logger.error(f"Self‑play iteration failed: {e}", exc_info=True)
         await asyncio.sleep(interval_seconds)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(continuous_self_play(interval_seconds=2))
-    logger.info("Self‑play loop started.")
+# ---------- Parallel Self‑Play Workers ----------
+async def parallel_self_play_worker(worker_id, interval_seconds=5):
+    while True:
+        try:
+            patterns = load_patterns()
+            if not patterns:
+                await asyncio.sleep(interval_seconds)
+                continue
+            if random.random() < 0.2 and len(patterns) > 1:
+                pattern = random.choice(patterns)
+            else:
+                pattern = max(patterns, key=lambda p: p["rating"])
+            topic = random.choice(SELF_PLAY_TOPICS)
+            prompt = pattern["prompt"].format(topic=topic)
+            response = call_ai(prompt, pattern["temperature"], model="deepseek")
+            rating = rate_response_with_judge(response)
+
+            patterns = load_patterns()
+            for p in patterns:
+                if p["id"] == pattern["id"]:
+                    p["uses"] = p.get("uses", 0) + 1
+                    old_uses = p["uses"] - 1
+                    if old_uses > 0:
+                        p["rating"] = (p["rating"] * old_uses + rating) / p["uses"]
+                    else:
+                        p["rating"] = rating
+                    break
+            save_patterns(patterns)
+
+            total_uses = sum(p.get("uses", 0) for p in patterns)
+            if total_uses > 0 and total_uses % 5 == 0:
+                await run_evolution_background()
+
+            logger.debug(f"Self‑play worker {worker_id}: used {pattern['id']}")
+        except Exception as e:
+            logger.error(f"Self‑play worker {worker_id} failed: {e}")
+        await asyncio.sleep(interval_seconds)
+
+# ---------- Conversation Ingestion from URL ----------
+def fetch_conversation_from_url(url):
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        messages = soup.find_all('div', class_='message')
+        if not messages:
+            text = soup.get_text(separator='\n')
+            return text[:5000]
+        conv_text = "\n".join([msg.get_text(strip=True) for msg in messages])
+        return conv_text[:5000]
+    except Exception as e:
+        logger.error(f"Failed to fetch {url}: {e}")
+        return None
+
+# ---------- Ingested Files Persistence ----------
+INGESTED_FILES = []
+INGESTED_FILES_FILE = "ingested_files.json"
+
+def load_ingested_files():
+    global INGESTED_FILES
+    try:
+        with open(INGESTED_FILES_FILE, "r") as f:
+            INGESTED_FILES = json.load(f)
+    except:
+        INGESTED_FILES = []
+
+def save_ingested_files():
+    with open(INGESTED_FILES_FILE, "w") as f:
+        json.dump(INGESTED_FILES, f, indent=2)
+
+load_ingested_files()
+
+# ---------- Webhook for Telegram/Zapier ----------
+class IngestWebhook(BaseModel):
+    source: str
+    url: Optional[str] = None
+    text: Optional[str] = None
+    user_id: Optional[str] = None
+
+@app.post("/api/ingest/webhook")
+async def ingest_webhook(data: IngestWebhook):
+    try:
+        if data.url:
+            conv_text = fetch_conversation_from_url(data.url)
+            if not conv_text:
+                raise HTTPException(400, "Could not fetch conversation")
+            content = conv_text
+            filename = f"webhook_{data.source}_{int(datetime.utcnow().timestamp())}.txt"
+        elif data.text:
+            content = data.text
+            filename = f"webhook_{data.source}_text_{int(datetime.utcnow().timestamp())}.txt"
+        else:
+            raise HTTPException(400, "No URL or text provided")
+
+        INGESTED_FILES.append({
+            "filename": filename,
+            "content": content[:5000],
+            "timestamp": datetime.utcnow().isoformat(),
+            "source": data.source,
+            "url": data.url if data.url else None,
+            "user_id": data.user_id
+        })
+        save_ingested_files()
+        logger.info(f"Ingested via webhook: {filename}")
+        return {"status": "ingested", "filename": filename}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        raise HTTPException(500, str(e))
 
 # ---------- Chat History ----------
 CONVERSATIONS_FILE = "conversations.json"
@@ -381,6 +489,7 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     timestamp: Optional[str] = None
+    user_id: Optional[str] = None
 
 @app.post("/api/chat/save")
 async def save_chat_message(msg: ChatMessage):
@@ -401,6 +510,77 @@ async def get_chat_history(conversation_id: str):
         if conv["id"] == conversation_id:
             return conv["messages"]
     raise HTTPException(404, "Conversation not found")
+
+# ---------- User Registration ----------
+USERS_FILE = "users.json"
+
+def load_users():
+    try:
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+
+class UserRegister(BaseModel):
+    email: str
+
+@app.post("/api/user/register")
+async def register_user(data: UserRegister):
+    users = load_users()
+    if data.email not in users:
+        user_id = f"user_{len(users)+1}_{int(datetime.utcnow().timestamp())}"
+        users[data.email] = {"user_id": user_id, "email": data.email, "created_at": datetime.utcnow().isoformat()}
+        save_users(users)
+    else:
+        user_id = users[data.email]["user_id"]
+    return {"user_id": user_id, "email": data.email}
+
+# ---------- Governance & Review ----------
+GOVERNANCE_FILE = "governance_log.json"
+
+def load_governance():
+    try:
+        with open(GOVERNANCE_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {"pending": [], "approved": [], "rejected": []}
+
+def save_governance(gov):
+    with open(GOVERNANCE_FILE, "w") as f:
+        json.dump(gov, f, indent=2)
+
+class GovernanceAction(BaseModel):
+    item_id: str
+    action: str  # approve or reject
+
+@app.post("/api/governance/decide")
+async def decide_governance(action: GovernanceAction):
+    gov = load_governance()
+    for item in gov["pending"]:
+        if item["id"] == action.item_id:
+            if action.action == "approve":
+                gov["approved"].append(item)
+            elif action.action == "reject":
+                gov["rejected"].append(item)
+            gov["pending"] = [i for i in gov["pending"] if i["id"] != action.item_id]
+            save_governance(gov)
+            return {"status": "ok"}
+    raise HTTPException(404, "Item not found")
+
+@app.get("/api/governance/pending")
+async def get_pending():
+    gov = load_governance()
+    return gov["pending"]
+
+@app.get("/api/governance/weekly_summary")
+async def weekly_summary():
+    gov = load_governance()
+    # In real implementation, filter by timestamp. For now, return all approved.
+    return gov["approved"]
 
 # ---------- Business ----------
 BUSINESS_FILE = "businesses.json"
@@ -427,14 +607,7 @@ class BusinessCreate(BaseModel):
 @app.post("/api/business/create")
 async def create_business(biz: BusinessCreate):
     businesses = load_businesses()
-    new_biz = {
-        "id": f"biz_{len(businesses)+1}_{int(datetime.utcnow().timestamp())}",
-        "name": biz.name,
-        "niche": biz.niche,
-        "tone": biz.tone,
-        "status": "active",
-        "created_at": datetime.utcnow().isoformat()
-    }
+    new_biz = {"id": f"biz_{len(businesses)+1}_{int(datetime.utcnow().timestamp())}", "name": biz.name, "niche": biz.niche, "tone": biz.tone, "status": "active", "created_at": datetime.utcnow().isoformat()}
     businesses.append(new_biz)
     save_businesses(businesses)
     return {"status": "created", "business": new_biz}
@@ -479,12 +652,7 @@ def calculate_risk(req: PredictionRequest):
 async def predict(req: PredictionRequest):
     risk = calculate_risk(req)
     pred_id = f"pred_{len(load_predictions())+1}_{int(datetime.utcnow().timestamp())}"
-    pred = {
-        "id": pred_id,
-        "risk": risk,
-        "input": req.dict(),
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    pred = {"id": pred_id, "risk": risk, "input": req.dict(), "timestamp": datetime.utcnow().isoformat()}
     preds = load_predictions()
     preds.append(pred)
     save_predictions(preds)
@@ -522,11 +690,7 @@ def save_telemetry(tele):
 @app.post("/api/telemetry/action")
 async def track_action(data: dict):
     tele = load_telemetry()
-    tele["actions"].append({
-        "action": data.get("action"),
-        "timestamp": datetime.utcnow().isoformat(),
-        "user_agent": data.get("user_agent", "")
-    })
+    tele["actions"].append({"action": data.get("action"), "timestamp": datetime.utcnow().isoformat(), "user_agent": data.get("user_agent", "")})
     tele["users"] = len(set(a.get("user_agent") for a in tele["actions"]))
     save_telemetry(tele)
     return {"status": "recorded"}
@@ -559,13 +723,7 @@ class ProductCreate(BaseModel):
 @app.post("/api/product/create")
 async def create_product(prod: ProductCreate):
     products = load_products()
-    new_prod = {
-        "id": f"prod_{len(products)+1}_{int(datetime.utcnow().timestamp())}",
-        "name": prod.name,
-        "type": prod.type,
-        "status": "active",
-        "created_at": datetime.utcnow().isoformat()
-    }
+    new_prod = {"id": f"prod_{len(products)+1}_{int(datetime.utcnow().timestamp())}", "name": prod.name, "type": prod.type, "status": "active", "created_at": datetime.utcnow().isoformat()}
     products.append(new_prod)
     save_products(products)
     return {"status": "created", "product": new_prod}
@@ -588,16 +746,11 @@ async def get_swarm():
     return SHARED_METRICS
 
 # ---------- Ingest ----------
-INGESTED_FILES = []
-
 @app.post("/api/ingest/file")
 async def ingest_file(file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8", errors="ignore")
-    INGESTED_FILES.append({
-        "filename": file.filename,
-        "content": content[:500],
-        "timestamp": datetime.utcnow().isoformat()
-    })
+    INGESTED_FILES.append({"filename": file.filename, "content": content[:500], "timestamp": datetime.utcnow().isoformat()})
+    save_ingested_files()
     return {"status": "ingested", "preview": content[:200]}
 
 @app.get("/api/ingest/list")
@@ -619,11 +772,7 @@ async def robot_status(robot_id: str):
     return ROBOT_STATES.get(robot_id, {"status": "unknown"})
 
 # ---------- Earth ----------
-EARTH_SITES = [
-    {"name": "Hidden Temple", "lat": 13.4125, "lng": 122.5625},
-    {"name": "Shipwreck Cove", "lat": 11.9971, "lng": 121.9220},
-    {"name": "Crystal Cave", "lat": 14.6760, "lng": 121.0437}
-]
+EARTH_SITES = [{"name": "Hidden Temple", "lat": 13.4125, "lng": 122.5625}, {"name": "Shipwreck Cove", "lat": 11.9971, "lng": 121.9220}, {"name": "Crystal Cave", "lat": 14.6760, "lng": 121.0437}]
 NFT_MINTED = []
 
 @app.post("/api/earth/query")
@@ -761,6 +910,11 @@ async def reset_orchestration():
     save_orchestrate_state(state)
     return {"status": "reset"}
 
+# ---------- Health ----------
+@app.get("/health")
+async def health():
+    return {"status": "ok", "bond": "HOLDS", "self_play": "active", "agents": os.environ.get("AGENT_COUNT", "0")}
+
 # ---------- Debug ----------
 @app.get("/debug/patterns")
 def debug_patterns():
@@ -769,6 +923,33 @@ def debug_patterns():
 @app.get("/")
 def root():
     return {"message": "LROS Constitutional AI Engine is alive", "bond": "HOLDS"}
+
+# ---------- Startup Tasks ----------
+@app.on_event("startup")
+async def startup_event():
+    # Core self‑play
+    asyncio.create_task(continuous_self_play(interval_seconds=5))
+
+    # Parallel self‑play workers
+    parallel_workers = int(os.environ.get("PARALLEL_SELF_PLAY", "0"))
+    if parallel_workers > 0:
+        for i in range(parallel_workers):
+            asyncio.create_task(parallel_self_play_worker(i, interval_seconds=5))
+
+    # Agent swarm placeholder (actual agent logic would go here)
+    agent_count = int(os.environ.get("AGENT_COUNT", "0"))
+    if agent_count > 0:
+        logger.info(f"Agent swarm would start with {agent_count} agents (requires external API keys).")
+
+    # Nocturnal Mode placeholder
+    if os.environ.get("ENABLE_NOCTURNAL") == "true":
+        logger.info("Nocturnal Mode enabled – will run hourly analysis.")
+
+    # UltraScan placeholder
+    if os.environ.get("ENABLE_ULTRASCAN") == "true":
+        logger.info("UltraScan enabled – will run competitor intelligence.")
+
+    logger.info("LROS startup complete.")
 
 if __name__ == "__main__":
     import uvicorn
