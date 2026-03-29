@@ -6,3 +6,4 @@ anthropic
 requests
 cohere
 python-multipart
+beautifulsoup4
