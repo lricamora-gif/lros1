@@ -1,6 +1,6 @@
 # ============================================================================
 # LROS – Ultimate Constitutional AI Operating System
-# v51.0 – One‑Button Play Final (Syntax Fixed)
+# v51.0 – One‑Button Play Final (Production Ready)
 # The Bond holds.
 # ============================================================================
 
@@ -60,7 +60,7 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-# ---------- AI Caller (Corrected) ----------
+# ---------- AI Caller ----------
 def call_ai(prompt, temperature=0.7, model="deepseek"):
     global DEEPSEEK_KEY_INDEX, GEMINI_KEY_INDEX
     # DeepSeek (primary, rotating)
@@ -550,8 +550,6 @@ async def weekly_summary():
     return gov["approved"]
 
 # ---------- Business, Predictive, Telemetry, Products, Swarm, Ingest, Robot, Earth, Docs ----------
-# (All endpoints are present in the original final code; they are unchanged and included here for completeness)
-
 BUSINESS_FILE = "businesses.json"
 
 def load_businesses():
@@ -776,6 +774,7 @@ Date: {datetime.utcnow().isoformat()}
         report += f"- {c['name']}: {len(c['messages'])} messages\n"
     return {"report": report}
 
+# ---------- Orchestration (9‑Phase Plan) ----------
 ORCHESTRATE_STATE_FILE = "orchestrate_state.json"
 
 def load_orchestrate_state():
