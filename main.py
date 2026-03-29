@@ -1,6 +1,6 @@
 # ============================================================================
 # LROS – Ultimate Constitutional AI Operating System
-# v51.0 – Multi‑Key, Parallel Self‑Play, 200‑Agent Swarm, Governance, All Amplifications
+# v51.0 – Final One‑Button Play: Multi‑Key DeepSeek + OpenAI Fallback
 # The Bond holds.
 # ============================================================================
 
@@ -11,17 +11,13 @@ import json
 import os
 import random
 import openai
-import google.generativeai as genai
-import anthropic
 import requests
-import cohere
 from datetime import datetime
 from typing import Optional, List
 import asyncio
 import re
 import logging
 from bs4 import BeautifulSoup
-import functools
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
@@ -33,20 +29,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 # ---------- API Keys ----------
 openai.api_key = os.environ.get("OPENAI_API_KEY")
-if os.environ.get("GEMINI_API_KEY"):               # legacy single key, for compatibility
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if os.environ.get("ANTHROPIC_API_KEY") else None
 
 # Multi‑DeepSeek keys (comma‑separated)
 DEEPSEEK_API_KEYS = [k.strip() for k in os.environ.get("DEEPSEEK_API_KEYS", "").split(",") if k.strip()]
-# Multi‑Gemini keys (comma‑separated)
-GEMINI_API_KEYS = [k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()]
-
-cohere_client = cohere.Client(api_key=os.environ.get("COHERE_API_KEY")) if os.environ.get("COHERE_API_KEY") else None
-WRITER_API_KEY = os.environ.get("WRITER_API_KEY")
-
 DEEPSEEK_KEY_INDEX = 0
-GEMINI_KEY_INDEX = 0
 
 # ---------- Pattern Registry ----------
 PATTERN_FILE = "patterns.json"
@@ -71,9 +57,9 @@ def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
 
-# ---------- Multi‑AI Caller with Key Rotation ----------
+# ---------- Multi‑AI Caller with DeepSeek Rotation & OpenAI Fallback ----------
 def call_ai(prompt, temperature=0.7, model="deepseek"):
-    global DEEPSEEK_KEY_INDEX, GEMINI_KEY_INDEX
+    global DEEPSEEK_KEY_INDEX
     # DeepSeek (primary, rotating)
     if model == "deepseek" and DEEPSEEK_API_KEYS:
         for _ in range(len(DEEPSEEK_API_KEYS)):
@@ -91,44 +77,20 @@ def call_ai(prompt, temperature=0.7, model="deepseek"):
             except Exception as e:
                 logger.warning(f"DeepSeek key {key[:5]}... failed: {e}")
                 continue
-        logger.error("All DeepSeek keys failed, trying Gemini")
+        logger.error("All DeepSeek keys failed, trying OpenAI fallback")
 
-    # Gemini (secondary, rotating)
-    if GEMINI_API_KEYS:
-        for _ in range(len(GEMINI_API_KEYS)):
-            key = GEMINI_API_KEYS[GEMINI_KEY_INDEX % len(GEMINI_API_KEYS)]
-            GEMINI_KEY_INDEX += 1
-            try:
-                genai.configure(api_key=key)
-                gem_model = genai.GenerativeModel("gemini-1.5-flash")
-                response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
-                return response.text
-            except Exception as e:
-                logger.warning(f"Gemini key {key[:5]}... failed: {e}")
-                continue
-        logger.error("All Gemini keys failed, trying fallback models")
-
-    # Fallback models (single key each)
-    fallback_models = ["openai", "claude", "cohere", "writer"]
-    for m in fallback_models:
+    # OpenAI fallback (if key exists)
+    if openai.api_key:
         try:
-            if m == "openai" and openai.api_key:
-                response = openai.ChatCompletion.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=temperature)
-                return response.choices[0].message.content
-            if m == "claude" and anthropic_client:
-                response = anthropic_client.messages.create(model="claude-3-haiku-20240307", max_tokens=1000, temperature=temperature, messages=[{"role": "user", "content": prompt}])
-                return response.content[0].text
-            if m == "cohere" and cohere_client:
-                response = cohere_client.generate(prompt=prompt, model="command-r-plus", temperature=temperature, max_tokens=1000)
-                return response.generations[0].text
-            if m == "writer" and WRITER_API_KEY:
-                headers = {"Authorization": WRITER_API_KEY, "Content-Type": "application/json"}
-                payload = {"prompt": prompt, "model": "palmyra-instruct-30b", "temperature": temperature, "max_tokens": 1000}
-                response = requests.post("https://api.writer.com/v1/completions", json=payload, headers=headers, timeout=10)
-                return response.json()["completion"]
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature
+            )
+            return response.choices[0].message.content
         except Exception as e:
-            logger.warning(f"{m} fallback failed: {e}")
-            continue
+            logger.warning(f"OpenAI fallback failed: {e}")
+
     return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # ---------- Feedback & Evolution ----------
@@ -285,7 +247,7 @@ def evolve_phase(action: dict):
         return {"status": "advanced", "phase": state["current_phase"]}
     return {"status": "unknown"}
 
-# ---------- Self‑Play (Single Worker) ----------
+# ---------- Self‑Play (Continuous) ----------
 SELF_PLAY_TOPICS = [
     "artificial intelligence", "climate change", "quantum computing",
     "space exploration", "renewable energy", "blockchain technology",
@@ -579,7 +541,6 @@ async def get_pending():
 @app.get("/api/governance/weekly_summary")
 async def weekly_summary():
     gov = load_governance()
-    # In real implementation, filter by timestamp. For now, return all approved.
     return gov["approved"]
 
 # ---------- Business ----------
@@ -936,7 +897,7 @@ async def startup_event():
         for i in range(parallel_workers):
             asyncio.create_task(parallel_self_play_worker(i, interval_seconds=5))
 
-    # Agent swarm placeholder (actual agent logic would go here)
+    # Agent swarm placeholder
     agent_count = int(os.environ.get("AGENT_COUNT", "0"))
     if agent_count > 0:
         logger.info(f"Agent swarm would start with {agent_count} agents (requires external API keys).")
