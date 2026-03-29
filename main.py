@@ -1,6 +1,6 @@
 # ============================================================================
 # LROS – Ultimate Constitutional AI Operating System
-# v51.0 – Adaptive Multi‑Key Pool (No OpenAI)
+# v51.0 – Paid DeepSeek + Cerebras + Groq Fallback (No Gemini)
 # The Bond holds.
 # ============================================================================
 
@@ -17,7 +17,6 @@ import asyncio
 import re
 import logging
 from bs4 import BeautifulSoup
-from collections import deque
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
@@ -27,141 +26,30 @@ logger = logging.getLogger("lros")
 app = FastAPI(title="LROS Ultimate Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# ---------- API Keys (Multi‑Key, Comma‑Separated) ----------
+# ---------- API Keys (from environment) ----------
 DEEPSEEK_API_KEYS = [k.strip() for k in os.environ.get("DEEPSEEK_API_KEYS", "").split(",") if k.strip()]
-GEMINI_API_KEYS = [k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()]
 CEREBRAS_API_KEYS = [k.strip() for k in os.environ.get("CEREBRAS_API_KEYS", "").split(",") if k.strip()]
 GROQ_API_KEYS = [k.strip() for k in os.environ.get("GROQ_API_KEYS", "").split(",") if k.strip()]
 
 # ---------- Key Health Tracking ----------
-class KeyHealth:
-    def __init__(self, name, key, call_func):
-        self.name = name
-        self.key = key
-        self.call_func = call_func
-        self.recent_results = deque(maxlen=10)  # 1 = success, 0 = failure
-        self.disabled_until = None
+key_status = {}  # key -> {'failures': int, 'disabled_until': datetime}
 
-    def record_success(self):
-        self.recent_results.append(1)
-        self.disabled_until = None
+def is_key_enabled(key):
+    status = key_status.get(key, {'failures': 0, 'disabled_until': None})
+    if status['disabled_until'] and datetime.utcnow() < status['disabled_until']:
+        return False
+    return True
 
-    def record_failure(self):
-        self.recent_results.append(0)
-        # If 3 consecutive failures, disable for 60 seconds
-        if len(self.recent_results) >= 3 and all(r == 0 for r in list(self.recent_results)[-3:]):
-            self.disabled_until = datetime.utcnow() + timedelta(seconds=60)
-            logger.warning(f"Key {self.name} {self.key[:5]}... disabled for 60 seconds due to 3 consecutive failures")
+def mark_failure(key):
+    status = key_status.get(key, {'failures': 0, 'disabled_until': None})
+    status['failures'] += 1
+    if status['failures'] >= 3:
+        status['disabled_until'] = datetime.utcnow() + timedelta(seconds=60)
+        logger.warning(f"Key {key[:5]}... disabled for 60s due to 3 failures")
+    key_status[key] = status
 
-    @property
-    def success_rate(self):
-        if not self.recent_results:
-            return 1.0
-        return sum(self.recent_results) / len(self.recent_results)
-
-    @property
-    def is_enabled(self):
-        if self.disabled_until and datetime.utcnow() < self.disabled_until:
-            return False
-        return True
-
-# ---------- Build Key Pool ----------
-def build_key_pool():
-    pool = []
-
-    # Helper to create callable for each key
-    def make_deepseek_call(key):
-        def call(prompt, temperature):
-            headers = {"Authorization": f"Bearer {key}"}
-            payload = {
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature
-            }
-            response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=30)
-            return response.json()["choices"][0]["message"]["content"]
-        return call
-
-    def make_gemini_call(key):
-        import google.generativeai as genai
-        def call(prompt, temperature):
-            genai.configure(api_key=key)
-            gem_model = genai.GenerativeModel("gemini-1.5-flash")
-            response = gem_model.generate_content(prompt, generation_config={"temperature": temperature})
-            return response.text
-        return call
-
-    def make_cerebras_call(key):
-        def call(prompt, temperature):
-            headers = {"Authorization": f"Bearer {key}"}
-            payload = {
-                "model": "cerebras-2.0",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature
-            }
-            response = requests.post("https://api.cerebras.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
-            return response.json()["choices"][0]["message"]["content"]
-        return call
-
-    def make_groq_call(key):
-        def call(prompt, temperature):
-            headers = {"Authorization": f"Bearer {key}"}
-            payload = {
-                "model": "mixtral-8x7b-32768",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature
-            }
-            response = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
-            return response.json()["choices"][0]["message"]["content"]
-        return call
-
-    for key in DEEPSEEK_API_KEYS:
-        pool.append(KeyHealth("DeepSeek", key, make_deepseek_call(key)))
-    for key in GEMINI_API_KEYS:
-        pool.append(KeyHealth("Gemini", key, make_gemini_call(key)))
-    for key in CEREBRAS_API_KEYS:
-        pool.append(KeyHealth("Cerebras", key, make_cerebras_call(key)))
-    for key in GROQ_API_KEYS:
-        pool.append(KeyHealth("Groq", key, make_groq_call(key)))
-
-    return pool
-
-KEY_POOL = build_key_pool()
-POOL_INDEX = 0
-
-def call_ai(prompt, temperature=0.7):
-    global POOL_INDEX
-    # Sort enabled keys by success rate (descending) to try best first, but also rotate to avoid starvation
-    enabled_keys = [k for k in KEY_POOL if k.is_enabled]
-    if not enabled_keys:
-        return f"[Simulated] LROS would answer: {prompt[:100]}..."
-
-    # Use round‑robin with preference for higher success rate
-    # Start from current index, try each enabled key once
-    for _ in range(len(enabled_keys)):
-        idx = POOL_INDEX % len(enabled_keys)
-        POOL_INDEX += 1
-        key = enabled_keys[idx]
-        try:
-            logger.info(f"Trying {key.name} key {key.key[:5]}... (success rate {key.success_rate:.2f})")
-            result = key.call_func(prompt, temperature)
-            key.record_success()
-            return result
-        except Exception as e:
-            logger.warning(f"{key.name} key {key.key[:5]}... failed: {e}")
-            key.record_failure()
-            continue
-
-    # If all enabled keys failed, try disabled keys (maybe they recovered)
-    for key in KEY_POOL:
-        if not key.is_enabled:
-            try:
-                result = key.call_func(prompt, temperature)
-                key.record_success()
-                return result
-            except:
-                key.record_failure()
-    return f"[Simulated] LROS would answer: {prompt[:100]}..."
+def mark_success(key):
+    key_status[key] = {'failures': 0, 'disabled_until': None}
 
 # ---------- Pattern Registry ----------
 PATTERN_FILE = "patterns.json"
@@ -185,6 +73,70 @@ def load_patterns():
 def save_patterns(patterns):
     with open(PATTERN_FILE, "w") as f:
         json.dump(patterns, f, indent=2)
+
+# ---------- AI Caller (DeepSeek → Cerebras → Groq) ----------
+def call_ai(prompt, temperature=0.7):
+    # 1. DeepSeek (all paid keys, round‑robin via list order)
+    for key in DEEPSEEK_API_KEYS:
+        if not is_key_enabled(key):
+            continue
+        try:
+            headers = {"Authorization": f"Bearer {key}"}
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature
+            }
+            response = requests.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            result = response.json()["choices"][0]["message"]["content"]
+            mark_success(key)
+            return result
+        except Exception as e:
+            logger.warning(f"DeepSeek key {key[:5]}... failed: {e}")
+            mark_failure(key)
+            continue
+
+    # 2. Cerebras (free, fallback)
+    for key in CEREBRAS_API_KEYS:
+        if not is_key_enabled(key):
+            continue
+        try:
+            headers = {"Authorization": f"Bearer {key}"}
+            payload = {
+                "model": "cerebras-2.0",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature
+            }
+            response = requests.post("https://api.cerebras.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            result = response.json()["choices"][0]["message"]["content"]
+            mark_success(key)
+            return result
+        except Exception as e:
+            logger.warning(f"Cerebras key {key[:5]}... failed: {e}")
+            mark_failure(key)
+            continue
+
+    # 3. Groq (free, last resort)
+    for key in GROQ_API_KEYS:
+        if not is_key_enabled(key):
+            continue
+        try:
+            headers = {"Authorization": f"Bearer {key}"}
+            payload = {
+                "model": "mixtral-8x7b-32768",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature
+            }
+            response = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            result = response.json()["choices"][0]["message"]["content"]
+            mark_success(key)
+            return result
+        except Exception as e:
+            logger.warning(f"Groq key {key[:5]}... failed: {e}")
+            mark_failure(key)
+            continue
+
+    return f"[Simulated] LROS would answer: {prompt[:100]}..."
 
 # ---------- Feedback & Evolution ----------
 class Feedback(BaseModel):
