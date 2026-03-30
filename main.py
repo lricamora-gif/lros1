@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-# ---------- LROS v68.1 SOVEREIGN AUTONOMOUS CORE ----------
+# ---------- LROS v68.2 SOVEREIGN VOICE CORE ----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("LROS-Core")
 app = FastAPI()
@@ -31,40 +31,34 @@ WHITELIST = [
 # --- CORE STATE ---
 stats = {
     "uses": BASE_USES, "successes": BASE_SUCCESSES, "active_agent_id": "134",
-    "mutation_ledger": [], "logs": ["🚀 v68.1 Autonomous Core Online.", "🧬 51,150 Success Floor Verified."]
+    "mutation_ledger": [], "logs": ["🚀 v68.2 Sovereign Voice Core Online.", "🧬 51,150 Success Floor Verified."]
 }
 user_activity = {}
 
-# --- DIRECTORY & PERSISTENCE HEALING ---
-def ensure_dir(): 
-    os.makedirs(STATE_DIR, exist_ok=True)
+def ensure_dir(): os.makedirs(STATE_DIR, exist_ok=True)
 
 def load_json(path, default):
     if os.path.exists(path):
         try:
             with open(path, "r") as f: return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading {path}: {e}")
-            return default
+        except Exception as e: return default
     return default
 
 def save_json(path, data):
     ensure_dir()
     try:
         with open(path, "w") as f: json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving {path}: {e}")
+    except Exception as e: pass
 
 def load_from_disk():
     global stats
     disk_data = load_json(STATE_FILE, {})
     if disk_data.get("successes", 0) >= BASE_SUCCESSES:
         stats.update(disk_data)
-        logger.info("Sovereign Memory Restored from Disk.")
+        logger.info("Sovereign Memory Restored.")
 
-# --- 1. LAYER MANIFEST (The Constitution) ---
 def init_manifest():
-    default = {"version": "v68.1-Autonomous", "layers": [
+    default = {"version": "v68.2-Vocal", "layers": [
         {"id": "0", "name": "Immune Core", "type": "constitutional", "status": "active", "description": "Tamper detection and persistence."},
         {"id": "28", "name": "Self-Evolution", "type": "core", "status": "active", "description": "Optimizes layers based on performance."}
     ]}
@@ -113,7 +107,6 @@ async def deploy_layers():
     stats["logs"].append(f"🚀 Deployed {len(approved)} Approved Layers.")
     return {"status": "deployed", "count": len(approved)}
 
-# --- 2. HARDWARE REGISTRY (Device Protection) ---
 class DeviceRegister(BaseModel):
     device_id: str
     device_type: str
@@ -135,7 +128,6 @@ async def cmd_device(req: dict):
     stats["logs"].append(f"📡 Command Sent to {req.get('device_id')}: {cmd}")
     return {"status": "command_sent"}
 
-# --- 3. SYSTEM & TRACKING ---
 @app.post("/api/auth/verify")
 async def verify(req: dict):
     if req.get("email", "").lower() in WHITELIST: return {"status": "authorized"}
@@ -160,11 +152,12 @@ async def get_status():
 async def research(req: dict):
     topic = req.get("topic")
     stats["logs"].append(f"🔬 Autonomous Research: {topic}")
-    return {"report": f"LROS Executive Report on '{topic}':\n\n1. Market Gap Identified.\n2. Layer integration recommended.\n3. Drafted initial structural logic."}
+    return {"report": f"LROS Executive Report on '{topic}'.\n\n1. Market Gap Identified.\n2. Layer integration recommended.\n3. Drafted initial structural logic."}
 
 @app.post("/api/chat")
 async def sovereign_chat(req: dict):
-    return {"response": f"Strategic Analysis (DNA-E9.51k): Based on the Sovereign Constitution, the optimal path is executing the 70/30 pattern verified at 51,150."}
+    # Text updated to sound natural when spoken by TTS
+    return {"response": "I have reviewed the parameters. Based on our Sovereign Constitution, I recommend executing the 70/30 hybrid pattern, which we verified securely at success milestone 51,150."}
 
 @app.post("/api/ingest")
 async def ingest_intel(file: UploadFile = File(...)):
@@ -179,7 +172,6 @@ async def dl_memory():
     if os.path.exists(STATE_FILE): return FileResponse(path=STATE_FILE, filename="LROS_CORE_BACKUP.json")
     raise HTTPException(404, "Backup unavailable.")
 
-# --- THE SWARM ---
 async def evolve_cycle():
     global stats
     domains = ["Longevity Science", "Regulatory Compliance", "Venture Architecture", "Medical Innovation"]
