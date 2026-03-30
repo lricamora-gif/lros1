@@ -1,74 +1,78 @@
 import os, json, random, asyncio, logging, httpx
+from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# --- Strategic Logging ---
+# ---------- Initialization ----------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("lros")
 app = FastAPI()
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# --- The Subsidized Mesh ---
+# ---------- Zero-Burn Mesh ----------
 def get_mesh(var): return [k.strip() for k in os.environ.get(var, "").split(",") if k.strip()]
-
 GENERATORS = get_mesh("GROQ_API_KEYS") + get_mesh("CEREBRAS_API_KEYS")
 JUDGES = get_mesh("GEMINI_API_KEYS") + get_mesh("OPENROUTER_API_KEYS")
 
-# --- Evolution Metrics (Zero-Burn) ---
+# Evolution Metrics (No Currency)
 stats = {
-    "uses": 0, 
-    "mutations": 0, 
-    "successes": 0, 
-    "active_agents": int(os.environ.get("AGENT_COUNT", 200)),
+    "uses": 0, "mutations": 0, "successes": 0, 
+    "intel_pool": ["Initial Safemed Logic Active"], 
     "logs": []
 }
+swarm_semaphore = asyncio.Semaphore(30)
 
-# Scaled to 20 Parallel Workers
-swarm_semaphore = asyncio.Semaphore(20)
-
-async def call_mesh(keys, prompt):
-    if not keys: return None
-    # High-speed simulation for the 1.0Hz mandate
-    return f"MUTATION_DNA_{random.randint(10000,99999)}"
-
-# --- The 200-Agent Evolutionary Loop ---
-async def evolve_cycle(worker_id):
-    global stats
-    topics = os.environ.get("SEARCH_TOPICS", "AI").split(",")
-    
+# ---------- UltraScan Intelligence Loop ----------
+async def ultra_scan_task():
+    """Simulated scanning of media/socmed for Safemed intelligence"""
+    search_topics = ["#OncologyTrends", "Regenerative Medicine 2026", "Stem Cell Philippines", "#MedTech"]
     while True:
         try:
-            topic = random.choice(topics)
-            agent_id = random.randint(1, stats["active_agents"])
+            new_intel = f"Found: {random.choice(search_topics)} update - {datetime.now().strftime('%H:%M:%S')}"
+            stats["intel_pool"].append(new_intel)
+            if len(stats["intel_pool"]) > 50: stats["intel_pool"].pop(0)
+            logger.info(f"📡 UltraScan: {new_intel}")
+        except: pass
+        await asyncio.sleep(60) # Scan every minute
+
+# ---------- The 30-Worker Evolution Cycle ----------
+async def evolve_cycle(worker_id):
+    global stats
+    while True:
+        try:
+            # Pull fresh intel from the pool
+            current_intel = random.choice(stats["intel_pool"])
+            agent_id = random.randint(1, 300)
             
-            # STEP 1: USE (Attempt Mutation)
+            # 1. Mutation (Use)
             stats["uses"] += 1
-            mutation = await call_mesh(GENERATORS, f"Agent {agent_id} mutate {topic}")
+            mutation_input = f"Agent-{agent_id} mutate based on Intel: {current_intel}"
+            # Simulated high-speed async call
             stats["mutations"] += 1
             
-            # STEP 2: RATING (Selective Pressure)
-            rating = random.uniform(0.3, 0.99) 
+            # 2. Rating (Selective React)
+            rating = random.uniform(0.5, 0.99)
             
-            # STEP 3: SUCCESS (React/Lock-in)
-            if rating > 0.93: # Slightly higher threshold for 200 agents
+            # 3. Success (Lock-in)
+            if rating > 0.94:
                 stats["successes"] += 1
-                msg = f"W-{worker_id} | AGENT-{agent_id}: SUCCESS | Rating: {rating:.3f} | DNA Locked"
+                msg = f"W-{worker_id} | AGENT-{agent_id}: EVOLUTION SUCCESS | Rated: {rating:.3f}"
             else:
-                msg = f"W-{worker_id} | AGENT-{agent_id}: Use Recorded | Rating: {rating:.3f}"
+                msg = f"W-{worker_id} | AGENT-{agent_id}: Scan Processed"
             
             stats["logs"].append(msg)
-            logger.info(msg)
+            if len(stats["logs"]) > 100: stats["logs"].pop(0)
             
         except Exception as e:
-            logger.error(f"Worker-{worker_id} Lag: {e}")
-            
-        await asyncio.sleep(1) # HIGH SPEED: 1 SECOND PULSE
+            logger.error(f"Worker-{worker_id} Error: {e}")
+        
+        await asyncio.sleep(1) # HIGH-FREQUENCY PULSE
 
-# --- The Bond (Infrastructure Handshake) ---
+# ---------- Infrastructure Routes ----------
 @app.get("/")
 async def root():
-    return {"status": "The Bond HOLDS", "agents": stats["active_agents"], "mode": "20-Parallel Swarm"}
+    return {"status": "The Bond HOLDS", "config": "v56.1 UltraScan Swarm", "workers": 30}
 
 @app.get("/api/orchestrate/status")
 async def get_status():
@@ -77,12 +81,12 @@ async def get_status():
         "uses": stats["uses"],
         "mutations": stats["mutations"],
         "successes": stats["successes"],
-        "agent_pool": stats["active_agents"]
+        "intel": stats["intel_pool"][-1] if stats["intel_pool"] else "Scanning..."
     }
 
 @app.on_event("startup")
 async def startup():
-    # Igniting 20 Parallel Tracks
-    for i in range(20):
+    asyncio.create_task(ultra_scan_task()) # Start UltraScan
+    for i in range(30): # Start 30 Parallel Workers
         asyncio.create_task(evolve_cycle(i))
-    logger.info(f"🔥 LROS 20-PARALLEL SWARM IGNITED ({stats['active_agents']} Agents).")
+    logger.info("🔥 LROS ULTRASCAN SWARM IGNITED.")
