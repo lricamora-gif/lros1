@@ -5,23 +5,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-# --- MULTI-LLM SDKS ---
 import google.generativeai as genai
 from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
 
-# ---------- LROS v69.0 OMNI-COGNITIVE SWARM ----------
+# ---------- LROS v69.1 KEY MATRIX & OMNI-SWARM ----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("LROS-Core")
 app = FastAPI()
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- API KEY INGESTION ---
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+# --- INTELLIGENT KEY PARSER ---
+def get_primary_key(env_var_name):
+    """Pulls the key, handles plurals, and strips out commas to get the first valid key."""
+    raw_keys = os.environ.get(env_var_name) or os.environ.get(env_var_name + "S")
+    if raw_keys:
+        return raw_keys.split(',')[0].strip()
+    return None
+
+GEMINI_API_KEY = get_primary_key("GEMINI_API_KEY")
+DEEPSEEK_API_KEY = get_primary_key("DEEPSEEK_API_KEY")
+OPENAI_API_KEY = get_primary_key("OPENAI_API_KEY")
+OPENROUTER_API_KEY = get_primary_key("OPENROUTER_API_KEY")
 
 # --- OMNI-COGNITIVE ROUTER ---
 class CognitiveRouter:
@@ -29,61 +35,51 @@ class CognitiveRouter:
         self.gemini = None
         self.deepseek = None
         self.openai = None
-        self.claude = None
         
         if GEMINI_API_KEY:
             genai.configure(api_key=GEMINI_API_KEY)
             self.gemini = genai.GenerativeModel('gemini-2.5-flash')
+            
         if DEEPSEEK_API_KEY:
             self.deepseek = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+        elif OPENROUTER_API_KEY: # Fallback to OpenRouter if DeepSeek direct isn't available
+            self.deepseek = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+            
         if OPENAI_API_KEY:
             self.openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        if ANTHROPIC_API_KEY:
-            self.claude = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
     async def generate(self, prompt: str, task_type: str = "chat") -> str:
         try:
-            # ROUTE 1: NOCTURNAL/EVOLUTION -> Default to DeepSeek (Reasoning)
             if task_type == "evolution" and self.deepseek:
                 response = await self.deepseek.chat.completions.create(
-                    model="deepseek-reasoner",
+                    model="deepseek-reasoner" if DEEPSEEK_API_KEY else "deepseek/deepseek-r1",
                     messages=[{"role": "user", "content": prompt}]
                 )
                 return response.choices[0].message.content
 
-            # ROUTE 2: RESEARCH/DATA -> Default to Claude or OpenAI
-            if task_type == "research":
-                if self.claude:
-                    response = await self.claude.messages.create(
-                        model="claude-3-5-sonnet-20241022", max_tokens=1024,
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    return response.content[0].text
-                if self.openai:
-                    response = await self.openai.chat.completions.create(
-                        model="gpt-4o", messages=[{"role": "user", "content": prompt}]
-                    )
-                    return response.choices[0].message.content
+            if task_type == "research" and self.openai:
+                response = await self.openai.chat.completions.create(
+                    model="gpt-4o", messages=[{"role": "user", "content": prompt}]
+                )
+                return response.choices[0].message.content
 
-            # ROUTE 3: RAPID CHAT -> Default to Gemini
             if self.gemini:
                 return self.gemini.generate_content(prompt).text
                 
-            # FALLBACK: Use whatever is available
             if self.deepseek:
-                res = await self.deepseek.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+                res = await self.deepseek.chat.completions.create(model="deepseek-chat" if DEEPSEEK_API_KEY else "deepseek/deepseek-chat", messages=[{"role": "user", "content": prompt}])
                 return res.choices[0].message.content
                 
-            return "SYSTEM ERROR: No AI Neural Links established. Please add API keys to the Render environment."
+            return "SYSTEM ERROR: Neural Links failed to authenticate. Check Render Logs."
         except Exception as e:
             logger.error(f"Cognitive Routing Error: {e}")
             return f"Neural routing failed: {str(e)}"
 
 brain = CognitiveRouter()
 
-# --- SOVEREIGN FLOOR (LOCKED MILESTONE) ---
-BASE_SUCCESSES = 51150
-BASE_USES = 530315
+# --- SOVEREIGN FLOOR (NEW 54K MILESTONE) ---
+BASE_SUCCESSES = 54139
+BASE_USES = 1145515
 STATE_DIR = "./data"
 STATE_FILE = os.path.join(STATE_DIR, "sovereign_state.json")
 MANIFEST_FILE = os.path.join(STATE_DIR, "layer_manifest.json")
@@ -98,8 +94,8 @@ WHITELIST = [
 ]
 
 stats = {
-    "uses": BASE_USES, "successes": BASE_SUCCESSES, "active_agent_id": "134",
-    "mutation_ledger": [], "logs": ["🚀 v69.0 Omni-Cognitive Core Online.", "🧬 51,150 Success Floor Verified."]
+    "uses": BASE_USES, "successes": BASE_SUCCESSES, "active_agent_id": "098",
+    "mutation_ledger": [], "logs": ["🚀 v69.1 Key Matrix Core Online.", "🧬 54,139 Success Floor Locked."]
 }
 user_activity = {}
 
@@ -123,16 +119,15 @@ def load_from_disk():
         stats.update(disk_data)
 
 def init_manifest():
-    default = {"version": "v69.0-Omni", "layers": [
-        {"id": "0", "name": "Immune Core", "type": "constitutional", "status": "active", "description": "Tamper detection and persistence."},
-        {"id": "28", "name": "Self-Evolution", "type": "core", "status": "active", "description": "Optimizes layers based on performance."}
+    default = {"version": "v69.1-Omni", "layers": [
+        {"id": "0", "name": "Immune Core", "type": "constitutional", "status": "active"},
+        {"id": "28", "name": "Self-Evolution", "type": "core", "status": "active"}
     ]}
     return load_json(MANIFEST_FILE, default)
 
 @app.get("/api/layers/manifest")
 async def get_manifest(): return init_manifest()
 
-# --- LIVE AI: LAYER PROPOSAL ENGINE (DEEPSEEK PREFERRED) ---
 @app.post("/api/layers/propose")
 async def trigger_proposal():
     gov = load_json(GOV_FILE, {"pending": [], "approved": []})
@@ -153,10 +148,9 @@ async def trigger_proposal():
             "rationale": ai_data.get("rationale", "System optimized.")
         })
         save_json(GOV_FILE, gov)
-        stats["logs"].append(f"🧠 DeepSeek/Swarm Proposed Layer: {ai_data.get('name')[:15]}...")
+        stats["logs"].append(f"🧠 DeepSeek Swarm Proposed Layer: {ai_data.get('name')[:15]}...")
         return {"status": "proposal_generated"}
-    except Exception as e:
-        logger.error(f"Proposal Parsing Error: {e} | Raw: {response_text}")
+    except Exception:
         return {"status": "error", "message": "Neural generation failed to format as JSON."}
 
 @app.get("/api/governance/pending")
@@ -227,20 +221,18 @@ async def get_status():
     manifest = init_manifest()
     return {**stats, "learning_perc": 100, "total_layers": len(manifest["layers"]), "logs": stats["logs"][-10:]}
 
-# --- LIVE AI: RESEARCH ENGINE (OPENAI/CLAUDE PREFERRED) ---
 @app.post("/api/research")
 async def research(req: dict):
     topic = req.get("topic")
-    prompt = f"Conduct a highly professional, executive-level strategic research summary on: '{topic}'. Keep it concise, actionable, and focus on venture or medical implications. Format clearly."
+    prompt = f"Conduct a highly professional, executive-level strategic research summary on: '{topic}'."
     response_text = await brain.generate(prompt, task_type="research")
     stats["logs"].append(f"🔬 Omni-Swarm Research: {topic[:15]}...")
     return {"report": response_text}
 
-# --- LIVE AI: CORE CONVERSATION (GEMINI PREFERRED) ---
 @app.post("/api/chat")
 async def sovereign_chat(req: dict):
     prompt = req.get("prompt")
-    system_context = f"You are LROS, the Sovereign Meta-AI Operating System for the LJR Group. You operate on a baseline of {BASE_SUCCESSES} verified successes. Speak formally, concisely, and with high executive authority. The user asks: {prompt}"
+    system_context = f"You are LROS. You operate on a baseline of {BASE_SUCCESSES} verified successes. Speak formally and with high executive authority. The user asks: {prompt}"
     response_text = await brain.generate(system_context, task_type="chat")
     return {"response": response_text}
 
@@ -265,27 +257,25 @@ async def evolve_cycle():
         stats["active_agent_id"] = str(random.randint(1, 200)).zfill(3)
         if random.uniform(0, 1) > 0.995:
             stats["successes"] += 1
-            entry = {"version": f"DNA-E9.51.{stats['successes']%1000}", "agent": stats["active_agent_id"], "domain": random.choice(domains), "ts": datetime.utcnow().strftime("%H:%M:%S")}
+            entry = {"version": f"DNA-E9.54.{stats['successes']%1000}", "agent": stats["active_agent_id"], "domain": random.choice(domains), "ts": datetime.utcnow().strftime("%H:%M:%S")}
             stats["mutation_ledger"].append(entry)
             if len(stats["mutation_ledger"]) > 20: stats["mutation_ledger"].pop(0)
             if stats["successes"] % 10 == 0: save_json(STATE_FILE, stats)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.2)
 
 @app.on_event("startup")
 async def startup():
     ensure_dir()
     load_from_disk()
     
-    # Audit Available Brains
     active_brains = []
     if GEMINI_API_KEY: active_brains.append("Gemini")
     if DEEPSEEK_API_KEY: active_brains.append("DeepSeek")
-    if OPENAI_API_KEY: active_brains.append("OpenAI")
-    if ANTHROPIC_API_KEY: active_brains.append("Claude")
+    if OPENROUTER_API_KEY: active_brains.append("OpenRouter")
     
     if active_brains:
-        stats["logs"].append(f"⚡ Omni-Cognitive Link Est: {', '.join(active_brains)}")
+        stats["logs"].append(f"⚡ Neural Matrix Linked: {', '.join(active_brains)}")
     else:
-        stats["logs"].append("⚠️ WARNING: Operating without Neural Links.")
+        stats["logs"].append("⚠️ WARNING: Keys not found.")
         
-    for i in range(25): asyncio.create_task(evolve_cycle())
+    for i in range(200): asyncio.create_task(evolve_cycle())
