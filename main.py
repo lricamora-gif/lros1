@@ -229,7 +229,7 @@ async def evolve_cycle():
     domains = ["Longevity Science", "Regulatory Compliance", "Venture Architecture", "Medical Innovation"]
     while True:
         stats["uses"] += 1
-        stats["active_agent_id"] = str(random.randint(1, 200)).zfill(3)
+        stats["active_agent_id"] = str(random.randint(1, 300)).zfill(3)
         if random.uniform(0, 1) > 0.995:
             stats["successes"] += 1
             evolve_rate = random.uniform(0.01, 0.05)
@@ -251,4 +251,4 @@ async def evolve_cycle():
 async def startup():
     ensure_dir()
     load_from_disk()
-    for i in range(200): asyncio.create_task(evolve_cycle())
+    for i in range(300): asyncio.create_task(evolve_cycle())
