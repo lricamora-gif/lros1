@@ -252,3 +252,15 @@ async def startup():
     ensure_dir()
     load_from_disk()
     for i in range(300): asyncio.create_task(evolve_cycle())
+        @app.get("/api/status")
+async def get_status():
+    # Assuming you have a global state dict or Supabase load
+    state = get_state()  # your function to load current state
+    # Build response matching what the frontend expects
+    return {
+        "successes": state.get("heart", 0) + state.get("lung", 0),  # total successes
+        "uses": state.get("uses", 0),
+        "learning_perc": state.get("dailyLearning", 0),
+        "mutation_ledger": state.get("mutation_ledger", []),
+        "logs": state.get("logs", [])
+    }
