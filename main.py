@@ -31,7 +31,6 @@ def ensure_tables():
         db.table("sovereign_state").select("id").limit(1).execute()
     except:
         db.table("sovereign_state").insert({"id": 1, "state_data": {}}).execute()
-    # mutations and layer_proposals are assumed to exist (created manually)
 ensure_tables()
 
 # ---------- State Management ----------
@@ -59,7 +58,7 @@ def get_state():
 def save_state(state):
     db.table("sovereign_state").update({"state_data": state, "updated_at": datetime.utcnow().isoformat()}).eq("id", 1).execute()
 
-# ---------- Helpers ----------
+# ---------- Helper: Insert Mutation ----------
 def insert_mutation(content, score, source, domain, agent, veto_reason=None):
     try:
         db.table("mutations").insert({
@@ -85,7 +84,7 @@ def insert_layer_proposal(name, description):
     except Exception as e:
         logger.error(f"Insert layer proposal failed: {e}")
 
-# ---------- Background Workers ----------
+# ---------- Heart Worker ----------
 async def heart_worker():
     while True:
         try:
@@ -115,9 +114,9 @@ async def heart_worker():
             logger.error(f"Heart worker error: {e}")
         await asyncio.sleep(0.5)
 
+# ---------- Lung Worker (simplified, no AI keys required) ----------
 async def lung_worker():
     threshold = 85
-    auto_lab = False
     models = ["deepseek", "mistral", "groq", "gemini", "cerebras"]
     domains = ["Medical Innovation", "Longevity Science", "Regulatory Compliance", "Venture Architecture"]
     while True:
@@ -130,20 +129,9 @@ async def lung_worker():
             content = f"Optimization strategy for {domain}: Increase efficiency by {random.randint(5,30)}% using {model} model."
 
             if oScore >= threshold:
-                if auto_lab:
-                    simScore = random.random()
-                    if simScore > 0.5:
-                        state["lung_successes"] += 1
-                        log = f"✅ [EVOLVE] {model} logic & physics passed (Sim: {simScore:.2f}) - {domain}"
-                        veto_reason = None
-                    else:
-                        state["rejections"] += 1
-                        log = f"❌ [VETO] {model} logic passed but failed physics (Sim: {simScore:.2f})"
-                        veto_reason = f"Physics simulation failed (score {simScore:.2f})"
-                else:
-                    state["lung_successes"] += 1
-                    log = f"✅ [EVOLVE] {model} logic accepted (Score: {oScore}%) - {domain}"
-                    veto_reason = None
+                state["lung_successes"] += 1
+                log = f"✅ [EVOLVE] {model} logic accepted (Score: {oScore}%) - {domain}"
+                veto_reason = None
             else:
                 state["rejections"] += 1
                 log = f"⛔ [VETO] Ombudsman rejected {model}. Score {oScore}% < {threshold}%"
@@ -245,6 +233,7 @@ async def reject_layer(layer_id: str):
 async def health():
     return {"status": "ok", "bond": "HOLDS"}
 
+# ---------- Startup ----------
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(heart_worker())
