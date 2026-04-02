@@ -5,3 +5,8 @@ pydantic
 google-generativeai
 openai
 anthropic
+pypdf
+python-docx
+beautifulsoup4
+trafilatura
+openai   # if you use OpenAI embeddings; or use a local model
