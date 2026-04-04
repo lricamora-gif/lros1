@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     domain: str = "general"
 
+# ========== CHAT ==========
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     sid = req.session_id or str(uuid.uuid4())
@@ -64,6 +65,20 @@ async def chat(req: ChatRequest):
     }).execute()
     return {"response": response, "session_id": sid}
 
+# ========== STATE & MUTATIONS (for backward compatibility) ==========
+@app.get("/api/state")
+async def get_state():
+    state = supabase.table("sovereign_state").select("state_data").eq("id", 1).execute()
+    if not state.data:
+        return {}
+    return state.data[0]["state_data"]
+
+@app.get("/api/mutations")
+async def get_mutations():
+    res = supabase.table("mutations").select("*").order("timestamp", desc=True).limit(100).execute()
+    return res.data
+
+# ========== INGEST ==========
 @app.post("/api/ingest")
 async def ingest(file: UploadFile | None = None, url: str | None = Form(None), text: str | None = Form(None)):
     source = "unknown"
@@ -90,6 +105,7 @@ async def ingest(file: UploadFile | None = None, url: str | None = Form(None), t
         supabase.table("sovereign_state").update({"state_data": d}).eq("id", 1).execute()
     return {"status": "ingested"}
 
+# ========== LAYER APPROVE/REJECT ==========
 @app.post("/api/layers/approve")
 async def approve_layer(layer_id: str):
     supabase.table("layer_proposals").update({"status": "approved", "approved_at": datetime.utcnow().isoformat()}).eq("id", layer_id).execute()
@@ -112,6 +128,7 @@ async def reject_layer(layer_id: str):
         supabase.table("sovereign_state").update({"state_data": d}).eq("id", 1).execute()
     return {"status": "rejected"}
 
+# ========== SECURE BASELINE ==========
 @app.post("/api/lung/secure_baseline")
 async def secure_baseline():
     state = supabase.table("sovereign_state").select("state_data").eq("id", 1).execute()
@@ -125,6 +142,7 @@ async def secure_baseline():
     supabase.table("sovereign_state").update({"state_data": d}).eq("id", 1).execute()
     return {"new_baseline": total}
 
+# ========== RESET COUNTERS ==========
 @app.post("/api/admin/reset_counters")
 async def reset_counters():
     state = supabase.table("sovereign_state").select("state_data").eq("id", 1).execute()
@@ -140,6 +158,7 @@ async def reset_counters():
         supabase.table("sovereign_state").update({"state_data": d}).eq("id", 1).execute()
     return {"status": "reset"}
 
+# ========== HEALTH ==========
 @app.get("/health")
 async def health():
     return {"status": "heart beating", "bond": "HOLDS"}
