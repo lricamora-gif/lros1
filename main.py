@@ -1,11 +1,9 @@
 import os
 import uuid
 import logging
-import asyncio
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
@@ -21,12 +19,12 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise Exception("Missing Supabase credentials")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 USE_ASYNC_QUEUE = os.getenv("USE_ASYNC_QUEUE", "false").lower() == "true"
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 async def call_ai(prompt: str) -> str:
     if not MISTRAL_API_KEY:
-        return "[Mock] No AI key"
+        return "[MOCK] No Mistral key"
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(
             "https://api.mistral.ai/v1/chat/completions",
@@ -50,13 +48,12 @@ async def chat(req: ChatRequest):
         supabase.table("agent_messages").insert({
             "agent_id": "chat_user",
             "message": req.message,
-            "round": 0,
-            "sent_at": datetime.utcnow().isoformat(),
-            "processed": False
+            "status": "pending",
+            "sent_at": datetime.utcnow().isoformat()
         }).execute()
-        response = "Your request has been queued. Lung will respond soon."
+        response = "Your request has been queued. Lung will respond later."
     else:
-        prompt = f"You are LROS. Domain: {req.domain}. Answer concisely.\nUser: {req.message}\nAssistant:"
+        prompt = f"Domain: {req.domain}. Answer concisely.\nUser: {req.message}\nAssistant:"
         response = await call_ai(prompt)
     supabase.table("chat_logs").insert({
         "session_id": sid,
@@ -83,8 +80,9 @@ async def ingest(file: UploadFile | None = None, url: str | None = Form(None), t
     else:
         raise HTTPException(400, "No data")
     supabase.table("knowledge_vault").insert({
-        "content": content, "source": source, "created_at": datetime.utcnow().isoformat(), "processed": False
+        "content": content, "source": source, "created_at": datetime.utcnow().isoformat()
     }).execute()
+    # Increase heart successes
     state = supabase.table("sovereign_state").select("state_data").eq("id", 1).execute()
     if state.data:
         d = state.data[0]["state_data"]
@@ -142,23 +140,11 @@ async def reset_counters():
         supabase.table("sovereign_state").update({"state_data": d}).eq("id", 1).execute()
     return {"status": "reset"}
 
-@app.get("/lung/heartbeat")
-async def lung_heartbeat():
-    """Called by Lung to update its last active timestamp."""
-    supabase.table("system_config").upsert({"key": "lung_last_active", "value": datetime.utcnow().isoformat()}).execute()
-    return {"status": "ok"}
-
 @app.get("/health")
 async def health():
-    # Check if Lung is alive (last heartbeat within 5 minutes)
-    lung_active = supabase.table("system_config").select("value").eq("key", "lung_last_active").execute()
-    if lung_active.data:
-        last_active = datetime.fromisoformat(lung_active.data[0]["value"])
-        if datetime.utcnow() - last_active > timedelta(minutes=5):
-            return {"status": "heart beating, but lung may be down", "lung_ok": False}
-    return {"status": "heart beating", "lung_ok": True}
+    return {"status": "heart beating", "bond": "HOLDS"}
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
-    with open("index.html", "r") as f:
-        return HTMLResponse(content=f.read())
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
