@@ -141,6 +141,25 @@ async def sales_dashboard():
     </body>
     </html>
     """
+    @app.get("/cron/daily_posts_report")
+async def daily_posts_report(background_tasks: BackgroundTasks):
+    background_tasks.add_task(send_posts_report)
+    return {"status": "report started"}
+
+async def send_posts_report():
+    yesterday = date.today() - timedelta(days=1)
+    # Query daily_post_summary view
+    posts_data = supabase.table("social_posts").select("platform, posted_at").gte("posted_at", yesterday.isoformat()).execute()
+    # Count per platform
+    from collections import Counter
+    counts = Counter(p["platform"] for p in posts_data.data)
+    # Compose email
+    html = f"<h2>LROS Social Media Report – {yesterday}</h2>"
+    for platform in ["facebook", "instagram", "tiktok", "twitter", "linkedin"]:
+        html += f"<p>{platform.capitalize()}: {counts.get(platform, 0)} posts</p>"
+    html += "<p>Goal: 3 per platform per day</p>"
+    # Send via SendGrid
+    ...
 
 @app.get("/health")
 async def health():
