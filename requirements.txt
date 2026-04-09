@@ -5,3 +5,4 @@ sendgrid
 httpx
 python-dotenv
 asyncpg
+python-multipart
