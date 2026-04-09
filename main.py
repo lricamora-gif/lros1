@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-LROS HEART – FINAL PRODUCTION READY
-Includes embedded Supabase credentials (EXPOSED – ROTATE AFTER SAVE)
-WARNING: These keys are public in this chat. Save locally, then regenerate.
+LROS HEART – Main API server (FastAPI)
+Handles chat, payments, layers, ingest, and dashboards.
 """
 
-import os, uuid, hmac, hashlib, json, logging
+import os
+import uuid
+import hmac
+import hashlib
+import logging
 from datetime import date, timedelta, datetime
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,20 +24,14 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lros-heart")
 
-# ========== EMBEDDED SUPABASE CREDENTIALS (ROTATE AFTER SAVE) ==========
-SUPABASE_URL = "https://favywzxbugvivqefqpxl.supabase.co"
-SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhdnl3enhidWd2aXZxZWZxcHhsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTgzNDAzMCwiZXhwIjoyMDg3NDEwMDMwfQ.HaQIjyZnMIUkqBAecr-eo1ffqDxnW2g2S1BaYfhslaY"
-# =======================================================================
-
-# Optional: still allow override from .env
-SUPABASE_URL = os.getenv("SUPABASE_URL", SUPABASE_URL)
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_SERVICE_KEY)
-
+# Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise Exception("Missing Supabase credentials")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# Payment webhook secret
+# Payment & notifications
 PAYMONGO_SECRET = os.getenv("PAYMONGO_WEBHOOK_SECRET")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 FOUNDER_EMAIL = os.getenv("FOUNDER_EMAIL")
@@ -47,7 +44,7 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 app = FastAPI(title="LROS Heart")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
-# ---------- Helper Functions ----------
+# ---------- Helper ----------
 async def call_ai(prompt: str) -> str:
     if not MISTRAL_API_KEY:
         return "[MOCK] No Mistral key"
@@ -114,7 +111,8 @@ async def brain_response(payload: dict):
         "founder": brain_id,
         "question": payload.get("question"),
         "response": answer,
-        "model": "remote_agent"
+        "model": "remote_agent",
+        "created_at": datetime.utcnow().isoformat()
     }).execute()
     return {"status": "ok"}
 
@@ -129,7 +127,6 @@ async def paymongo_webhook(request: Request, background_tasks: BackgroundTasks):
     event = data.get("data", {}).get("attributes", {}).get("type")
     if event == "payment.paid":
         attrs = data["data"]["attributes"]
-        payment_id = data["data"]["id"]
         amount = attrs["amount"] / 100
         product_id = attrs["metadata"].get("product_id")
         customer_email = attrs["metadata"].get("email", "")
@@ -278,7 +275,7 @@ async def get_state():
 
 @app.get("/api/mutations")
 async def get_mutations():
-    res = supabase.table("mutations").select("*").order("timestamp", desc=True).limit(100).execute()
+    res = supabase.table("mutations").select("*").order("created_at", desc=True).limit(100).execute()
     return res.data
 
 # ---------- Tools ----------
