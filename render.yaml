@@ -1,59 +1,6 @@
-﻿services:
-  - type: web
-    name: lros-donna
+services:
+  - type: worker
+    name: lros-lung
     env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
-    rootDir: services/donna
     envVars:
-      - key: NVIDIA_KEY
-        value: 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
-
-  - type: web
-    name: lros-lisa
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
-    rootDir: services/lisa
-    envVars:
-      - key: NVIDIA_KEY
-        value: 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
-
-  - type: web
-    name: lros-agents
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python app.py"
-    rootDir: services/agents
-    envVars:
-      - key: NVIDIA_KEY
-        value: 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
-      - key: SUPA_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltaGppbWtqbXVhd21qa3ZhYWZqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQwMDg0NSwiZXhwIjoyMDkwOTc2ODQ1fQ.Z6QCBjX7eLNaaizg9lj1KL-0hlcteWw1J0jbHN-NCb8
-
-  - type: web
-    name: lros-guard
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
-    rootDir: services/guard
-    envVars:
-      - key: NVIDIA_KEY
-        value: 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
-      - key: SUPA_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhdnl3enhidWd2aXZxZWZxcHBsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTgzNDAzMCwiZXhwIjoyMDg3NDEwMDMwfQ.HaQIjyZnMIUkqBAecr-eo1ffqDxnW2g2S1BaYfhslaY
-
-  - type: web
-    name: lros-dashboard
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
-    rootDir: services/dashboard
-    envVars:
-      - key: SUPA_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhdnl3enhidWd2aXZxZWZxcHBsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTgzNDAzMCwiZXhwIjoyMDg3NDEwMDMwfQ.HaQIjyZnMIUkqBAecr-eo1ffqDxnW2g2S1BaYfhslaY
+      - fromGroup: lros-uniform
